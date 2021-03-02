@@ -675,11 +675,11 @@ class Machine(object):
             # Extract all information
             core_indices = task_info[0]
             job_id = task_info[1]
-            if len(simulation.jobs[job_id].unscheduled_tasks) <= 0:
+            job = simulation.jobs[job_id]
+            if len(job.unscheduled_tasks) <= 0:
                 raise AssertionError('No redundant probes in Murmuration, yet tasks have finished?')
             task_index = task_info[2]
-            task_actual_duration = task_info[3]
-            probe_arrival_time = task_info[4]
+            probe_arrival_time = task_info[3]
 
             if(not all(x in self.free_cores.keys() for x in core_indices)):
                 #Wait for the next event to trigger this task processing
@@ -703,6 +703,7 @@ class Machine(object):
             # Best fit is just a time estimate, for task completion use the exact start times and durations.
             # So, processing time might be less than the current time, even though task completion will be after current time.
             processing_start_time = core_available_time if core_available_time > probe_arrival_time else probe_arrival_time
+            task_actual_duration = job.actual_task_duration[task_index]
             task_completion_time = processing_start_time + task_actual_duration
             if task_completion_time < earliest_task_completion_time:
                 #Replace our previous best candidate.
@@ -722,12 +723,13 @@ class Machine(object):
             # Extract all information
             core_indices = candidate_task_info[0]
             job_id = candidate_task_info[1]
-            if len(simulation.jobs[job_id].unscheduled_tasks) <= 0:
+            job = simulation.jobs[job_id]
+            if len(job.unscheduled_tasks) <= 0:
                 raise AssertionError('No redundant probes in Murmuration, yet tasks have finished?')
             task_index = candidate_task_info[2]
-            task_actual_duration = candidate_task_info[3]
-            probe_arrival_time = candidate_task_info[4]
+            probe_arrival_time = candidate_task_info[3]
 
+            task_actual_duration = job.actual_task_duration[task_index]
             if candidate_best_fit_time < current_time:
                 #This can happen due to precision of best fit time being in integers, but not so of task durations.
                 keeper.shift_holes(core_indices, candidate_best_fit_time, int(math.ceil(task_actual_duration)), current_time)
@@ -1383,7 +1385,7 @@ class Simulation(object):
             best_fit_for_tasks.append([chosen_machine, cores_at_chosen_machine, best_fit_time])
 
             #Update est time at this machine and its cores
-            probe_params = [cores_at_chosen_machine, job_id, task_index, task_actual_durations[task_index], current_time]
+            probe_params = [cores_at_chosen_machine, job_id, task_index, current_time]
             self.machines[chosen_machine].add_machine_probe(best_fit_time, probe_params)
             keeper.update_worker_queues_free_time(cores_at_chosen_machine, best_fit_time, best_fit_time + int(math.ceil(task_actual_durations[task_index])), current_time)
         cores_lists_for_reqs_to_machine_matrix.clear()
@@ -1816,8 +1818,7 @@ simulation = Simulation(MONITOR_INTERVAL, stealing, SCHEDULE_BIG_CENTRALIZED, WO
 simulation.run()
 
 print "Simulation ended in ", (time.time() - t1), " s "
-print "Threads total time ", threads_total_time, "placement total time ", placement_total_time
-print "Threads collection time ", threads_collection_time, "loop collection time ", loop_collection_time
+print "Placement total time ", placement_total_time
 print >> finished_file, "Average utilization in ", SYSTEM_SIMULATED, " with ", TOTAL_MACHINES,"machines and ",CORES_PER_MACHINE, " cores/machine ", POLICY," hole fitting policy is ", utilization
 
 finished_file.close()
