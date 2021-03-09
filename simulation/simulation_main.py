@@ -324,7 +324,7 @@ class ClusterStatusKeeper(object):
         self.worker_queues_free_time_end = {}
         self.worker_queues_free_time_start = {}
         self.btmap = bitmap.BitMap(num_workers)
-        for i in range(0, num_workers):
+        for i in xrange(0, num_workers):
            self.worker_queues[i] = []
            self.worker_queues_free_time_start[i] = [0]
            self.worker_queues_free_time_end[i] = [float('inf')]
@@ -377,7 +377,7 @@ class ClusterStatusKeeper(object):
                     # Find all possible holes at every granularity, each lasting task_duration time.
                     time_granularity = 1
                     end = time_end[hole] - task_duration + 1
-                    arr = range(start, end, time_granularity)
+                    arr = xrange(start, end, time_granularity)
                     for start_chunk in arr:
                         #print "[t=",arrival_time,"] For core ", core_id," fitting task of duration", task_duration,"into hole = ", time_start[hole], time_end[hole], "starting at", start_chunk
                         all_slots_list_add(start_chunk)
@@ -472,7 +472,7 @@ class ClusterStatusKeeper(object):
     def shift_holes(self, core_indices, previous_best_fit_time, task_duration, current_best_time):
         for worker_index in core_indices:
             found_hole = False
-            for hole_index in range(len(self.worker_queues_free_time_end[worker_index]) - 1):
+            for hole_index in xrange(len(self.worker_queues_free_time_end[worker_index]) - 1):
                 end_hole = self.worker_queues_free_time_end[worker_index][hole_index]
                 start_next_hole = self.worker_queues_free_time_start[worker_index][hole_index + 1]
                 if end_hole == previous_best_fit_time and start_next_hole == (previous_best_fit_time + task_duration):
@@ -514,7 +514,7 @@ class ClusterStatusKeeper(object):
                 # Order : start_hole, best_fit_start, best_fit_end, end_hole
                 # Find first start just less than or equal to best_fit_start
                 #print "Core", worker_index, "holes - for best fit (",best_fit_start, best_fit_end,") is "
-                for hole_index in range(len(self.worker_queues_free_time_start[worker_index])):
+                for hole_index in xrange(len(self.worker_queues_free_time_start[worker_index])):
                     start_hole = self.worker_queues_free_time_start[worker_index][hole_index]
                     end_hole = self.worker_queues_free_time_end[worker_index][hole_index]
                     #print "(",start_hole, end_hole,")"
@@ -768,9 +768,15 @@ class Machine(object):
             core_indices = task_info[0]
             assert len(core_indices) == 0
             job_id = task_info[1]
+            if not job_id in simulation.jobs.keys():
+                continue
+            job = simulation.jobs[job_id]
+            if len(job.unscheduled_tasks) <= 0:
+                raise AssertionError('No redundant probes in Murmuration, yet tasks have finished?')
             task_index = task_info[2]
-            task_actual_duration = task_info[3]
-            probe_arrival_time = task_info[4]
+            probe_arrival_time = task_info[3]
+            task_actual_duration = job.actual_task_duration[task_index]
+            task_cpu_request = job.cpu_reqs_by_tasks[task_index]
 
             # Remove redundant probes for this task without accounting for them in response time.
             if task_actual_duration not in simulation.jobs[job_id].unscheduled_tasks:
@@ -1360,7 +1366,6 @@ class Simulation(object):
     def find_workers_long_job_prio_murmuration(self, job_id, num_tasks, current_time, cpu_reqs_by_tasks, task_actual_durations):
         if num_tasks != len(cpu_reqs_by_tasks):
             raise AssertionError('Number of tasks provided not equal to length of cpu_reqs_by_tasks list')
-        hash_machines_considered = set(range(TOTAL_MACHINES))
         global placement_total_time
         est_time_machine_array = numpy.zeros(shape=(TOTAL_MACHINES))
         cores_lists_for_reqs_to_machine_matrix = collections.defaultdict()
@@ -1372,7 +1377,7 @@ class Simulation(object):
         placement_start_time = time.time()
         for task_index in xrange(num_tasks):
             cpu_req = cpu_reqs_by_tasks[task_index]
-            for machine_id in hash_machines_considered:
+            for machine_id in xrange(TOTAL_MACHINES):
                 est_time, core_list = get_machine_time(self.machines[machine_id].cores, cpu_req, current_time, task_actual_durations[task_index])
                 est_time_machine_array[machine_id] = est_time
                 cores_lists_for_reqs_to_machine_matrix[machine_id] = core_list
@@ -1468,7 +1473,7 @@ class Simulation(object):
             task_index = index / probe_ratio
             # The exact cores are a matter of availability at the machine.
             machine_ids.add(machine_id)
-            self.machines[machine_id].add_machine_probe([[], job.id, task_index, job.actual_task_duration[task_index], current_time, current_time])
+            self.machines[machine_id].add_machine_probe(current_time, [[], job.id, task_index, current_time])
 
         for machine_id in machine_ids:
             task_arrival_events.append((current_time, ProbeEventForMachines(self.machines[machine_id])))
@@ -1597,7 +1602,7 @@ class Simulation(object):
             raise AssertionError('Send probes received unequal number of machine indices and tasks')
         current_time += NETWORK_DELAY
         machine_ids = BitMap()
-        for index in range(len(machine_indices)):
+        for index in xrange(len(machine_indices)):
             machine_allocation = machine_indices[index]
             machine_id = machine_allocation[0]
             core_ids = machine_allocation[1]
