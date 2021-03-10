@@ -1757,6 +1757,9 @@ class Simulation(object):
         #Free up all memory
         del self.machines[:]
         del self.scheduler_indices[:]
+        total_busyness = 0.0
+        for worker in self.workers:
+            total_busyness += worker.busy_time
         del self.workers[:]
         print "Simulation ending, no more events. Jobs completed", self.jobs_completed
         self.jobs_file.close()
@@ -1764,11 +1767,7 @@ class Simulation(object):
         # Calculate utilizations of worker machines in DC
         time_elapsed_in_dc = current_time - first_time
         print "Total time elapsed in the DC is", time_elapsed_in_dc, "s" 
-        total_busyness = 0
-        for worker in self.workers:
-            total_busyness += worker.busy_time
         utilization = 100 * (float(total_busyness) / float(time_elapsed_in_dc * TOTAL_MACHINES*CORES_PER_MACHINE))
-        #TODO - Bug - Average utilization in  Murmuration  with  2 machines and  2  cores/machine  LEAST_LEFTOVER  hole fitting policy is  0.0
         print "Average utilization in ", SYSTEM_SIMULATED, " with ", TOTAL_MACHINES,"machines and ",CORES_PER_MACHINE, " cores/machine is ", utilization
 
 #####################################################################################################################
