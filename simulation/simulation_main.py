@@ -1369,8 +1369,8 @@ class Simulation(object):
         global placement_total_time
         est_time_machine_array = numpy.zeros(shape=(TOTAL_MACHINES))
         cores_lists_for_reqs_to_machine_matrix = collections.defaultdict()
-        # best_fit_for_tasks = [[ma, [cores]], [mb, [cores]], .... ]
-        best_fit_for_tasks = []
+        # best_fit_for_tasks = (ma, mb, .... )
+        best_fit_for_tasks = BitMap()
         current_time += NETWORK_DELAY
         get_machine_time = keeper.get_machine_est_wait
         machines = self.machines
@@ -1386,8 +1386,10 @@ class Simulation(object):
                 raise AssertionError('Error - Got best fit time that is infinite!')
             chosen_machine = numpy.where(est_time_machine_array == best_fit_time)[0][0]
             cores_at_chosen_machine = cores_lists_for_reqs_to_machine_matrix[chosen_machine]
+            if len(cores_at_chosen_machine) != cpu_req:
+                raise AssertionError("Not enough machines that pass filter requirement of job")
             #print"Choosing machine", chosen_machine,":[",cores_at_chosen_machine,"] with best fit time ",best_fit_time,"for task #", task_index, " task_duration", task_actual_durations[task_index]," arrival time ", current_time, "requesting", cpu_req, "cores"
-            best_fit_for_tasks.append([chosen_machine, cores_at_chosen_machine, best_fit_time])
+            best_fit_for_tasks.add(chosen_machine)
 
             #Update est time at this machine and its cores
             probe_params = [cores_at_chosen_machine, job_id, task_index, current_time]
@@ -1395,7 +1397,6 @@ class Simulation(object):
             keeper.update_worker_queues_free_time(cores_at_chosen_machine, best_fit_time, best_fit_time + int(math.ceil(task_actual_durations[task_index])), current_time)
         cores_lists_for_reqs_to_machine_matrix.clear()
         placement_total_time += time.time() - placement_start_time
-        # best_fit_for_tasks = [[ma, [cores]], [mb, [cores]], .... ]
         return best_fit_for_tasks
 
 
@@ -1595,26 +1596,14 @@ class Simulation(object):
         # Sort all workers running long jobs in this DC according to their estimated times.
         # Ranking policy used - Least estimated time and hole duration > estimted task time.
         # btmap indicates workers where long jobs are running
-        # Find workers and update the cluster status for long jobs
-        # Returns - [[m1,[cores]], [m2,[cores]],...]
+        # Find machines for tasks and trigger events.
+        # Returns a set of machines to service tasks of the job - (m1, m2, ...).
+        # May be less than the number of tasks due to same machines hosting more than one task.
         machine_indices = self.find_workers_long_job_prio_murmuration(job.id, job.num_tasks, current_time, job.cpu_reqs_by_tasks, job.actual_task_duration)
-        if len(machine_indices) != job.num_tasks:
-            raise AssertionError('Send probes received unequal number of machine indices and tasks')
         current_time += NETWORK_DELAY
-        machine_ids = BitMap()
-        for index in xrange(len(machine_indices)):
-            machine_allocation = machine_indices[index]
-            machine_id = machine_allocation[0]
-            core_ids = machine_allocation[1]
-            best_fit_time = machine_allocation[2]
-            if len(core_ids) != job.cpu_reqs_by_tasks[index]:
-                raise AssertionError("Not enough machines that pass filter requirement of job")
-            machine_ids.add(machine_id)
-
-        for machine_id in machine_ids:
-            task_arrival_events.append((current_time, ProbeEventForMachines(self.machines[machine_id])))
-
         # Return task arrival events for long jobs
+        for machine_id in machine_indices:
+            task_arrival_events.append((current_time, ProbeEventForMachines(self.machines[machine_id])))
         return task_arrival_events
 
     #Simulation class
