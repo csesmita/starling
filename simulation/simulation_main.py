@@ -676,8 +676,6 @@ class Machine(object):
             core_indices = task_info[0]
             job_id = task_info[1]
             job = simulation.jobs[job_id]
-            if len(job.unscheduled_tasks) <= 0:
-                raise AssertionError('No redundant probes in Murmuration, yet tasks have finished?')
             task_index = task_info[2]
             probe_arrival_time = task_info[3]
 
@@ -724,8 +722,6 @@ class Machine(object):
             core_indices = candidate_task_info[0]
             job_id = candidate_task_info[1]
             job = simulation.jobs[job_id]
-            if len(job.unscheduled_tasks) <= 0:
-                raise AssertionError('No redundant probes in Murmuration, yet tasks have finished?')
             task_index = candidate_task_info[2]
             probe_arrival_time = candidate_task_info[3]
 
@@ -771,8 +767,6 @@ class Machine(object):
             if not job_id in simulation.jobs.keys():
                 continue
             job = simulation.jobs[job_id]
-            if len(job.unscheduled_tasks) <= 0:
-                raise AssertionError('No redundant probes in Murmuration, yet tasks have finished?')
             task_index = task_info[2]
             probe_arrival_time = task_info[3]
             task_actual_duration = job.actual_task_duration[task_index]
@@ -1375,10 +1369,12 @@ class Simulation(object):
         get_machine_time = keeper.get_machine_est_wait
         machines = self.machines
         placement_start_time = time.time()
+        job = simulation.jobs[job_id]
         for task_index in xrange(num_tasks):
             cpu_req = cpu_reqs_by_tasks[task_index]
+            task_duration = task_actual_durations[task_index]
             for machine_id in xrange(TOTAL_MACHINES):
-                est_time, core_list = get_machine_time(self.machines[machine_id].cores, cpu_req, current_time, task_actual_durations[task_index])
+                est_time, core_list = get_machine_time(self.machines[machine_id].cores, cpu_req, current_time, task_duration)
                 est_time_machine_array[machine_id] = est_time
                 cores_lists_for_reqs_to_machine_matrix[machine_id] = core_list
             best_fit_time = int(numpy.sort(est_time_machine_array)[0])
@@ -1388,14 +1384,19 @@ class Simulation(object):
             cores_at_chosen_machine = cores_lists_for_reqs_to_machine_matrix[chosen_machine]
             if len(cores_at_chosen_machine) != cpu_req:
                 raise AssertionError("Not enough machines that pass filter requirement of job")
-            #print"Choosing machine", chosen_machine,":[",cores_at_chosen_machine,"] with best fit time ",best_fit_time,"for task #", task_index, " task_duration", task_actual_durations[task_index]," arrival time ", current_time, "requesting", cpu_req, "cores"
+            #print"Choosing machine", chosen_machine,":[",cores_at_chosen_machine,"] with best fit time ",best_fit_time,"for task #", task_index, " task_duration", task_duration," arrival time ", current_time, "requesting", cpu_req, "cores"
             best_fit_for_tasks.add(chosen_machine)
 
             #Update est time at this machine and its cores
             probe_params = [cores_at_chosen_machine, job_id, task_index, current_time]
             self.machines[chosen_machine].add_machine_probe(best_fit_time, probe_params)
-            keeper.update_worker_queues_free_time(cores_at_chosen_machine, best_fit_time, best_fit_time + int(math.ceil(task_actual_durations[task_index])), current_time)
+            keeper.update_worker_queues_free_time(cores_at_chosen_machine, best_fit_time, best_fit_time + int(math.ceil(task_duration)), current_time)
+            job.unscheduled_tasks.remove(task_duration)
+
         cores_lists_for_reqs_to_machine_matrix.clear()
+        if len(job.unscheduled_tasks) != 0:
+            raise AssertionError('All tasks of the job scheduled, yet non-zero unscheduled tasks?')
+        del job.unscheduled_tasks
         placement_total_time += time.time() - placement_start_time
         return best_fit_for_tasks
 
@@ -1661,7 +1662,6 @@ class Simulation(object):
         scheduler_algorithm_time = probe_arrival_time - job.start_time
 
         events = []
-        job.unscheduled_tasks.remove(task_duration)
         # Machine busy time should be a sum of worker busy times.
         workers = self.workers
         task_completion_time = task_duration + current_time
@@ -1684,7 +1684,6 @@ class Simulation(object):
             events.append((task_completion_time, TaskEndEventForMachines(core_index, self.SCHEDULE_BIG_CENTRALIZED, task_duration)))
 
         if is_job_complete:
-            del job.unscheduled_tasks
             del job.actual_task_duration
             del job.cpu_reqs_by_tasks
             del self.jobs[job.id]
