@@ -11,13 +11,10 @@ import math
 import random
 import Queue
 import operator
-import bitmap
-import copy
 import collections
 import numpy
 
 from gc import collect
-from pyroaring import BitMap
 
 RATIO_SCHEDULERS_TO_CORES = 0.1
 
@@ -174,9 +171,9 @@ class ClusterStatusKeeper(object):
         task_duration = int(math.ceil(task_duration))
         # Number of cores requested has to be atleast equal to the number of cores on the machine
         # Filter out machines that have less than requested number of cores
-        all_slots_list = BitMap()
+        all_slots_list = set()
         all_slots_list_add = all_slots_list.add
-        all_slots_list_cores = collections.defaultdict(BitMap)
+        all_slots_list_cores = collections.defaultdict(set)
         all_slots_fragmentation = collections.defaultdict(collections.defaultdict)
         inf_hole_start = {}
         for core in cores:
@@ -235,7 +232,7 @@ class ClusterStatusKeeper(object):
                         sorted_cores_fragmented = sorted(cores_fragmented.items(), key=operator.itemgetter(1), reverse=False)[0:cpu_req]
                     else:
                         raise AssertionError('Check the name of the policy')
-                    cores_list = BitMap(dict(sorted_cores_fragmented).keys())
+                    cores_list = set(dict(sorted_cores_fragmented).keys())
                 #print "Earliest start time for task", index," (duration - ", task_duration,") needing", cpu_req,"cores is ", start_time, "with cores", cores_list
                 # cpu_req is available when the fastest cpu_req number of cores is
                 # available for use at or after arrival_time.
@@ -542,10 +539,10 @@ class Worker(object):
         self.busy_time = 0.0
 
         #Role of a scheduler?
-        self.scheduler = None
+        self.scheduler = False
         if SYSTEM_SIMULATED == "Murmuration":
             if random.random() < RATIO_SCHEDULERS_TO_CORES:
-                self.scheduler = Scheduler()
+                self.scheduler = True
 
     #Worker class
     # In Murmuration, free_slot will report the same to the machine class.
@@ -553,10 +550,6 @@ class Worker(object):
         machine_id = simulation.get_machine_id_from_worker_id(self.id)
         machine = simulation.machines[machine_id]
         return machine.free_machine_core(self, current_time)
-
-class Scheduler(object):
-    def __init__(self):
-        pass
 
 #####################################################################################################################
 #####################################################################################################################
@@ -578,7 +571,7 @@ class Simulation(object):
             workers = machine.cores
             self.workers.extend(workers)
             for worker in workers:
-                if worker.scheduler is not None:
+                if worker.scheduler:
                     # Directly access scheduler indices in Simulation class
                     self.scheduler_indices.append(worker.id)
         if SYSTEM_SIMULATED == "Murmuration":
@@ -622,22 +615,22 @@ class Simulation(object):
     # for different tasks.
     # TODO: Other strategies - bulk allocation using well-fit, not best fit for tasks
     # Hole filling strategies, etc
-    def find_workers_long_job_prio_murmuration(self, job_id, num_tasks, current_time, cpu_reqs_by_tasks, task_actual_durations):
-        if num_tasks != len(cpu_reqs_by_tasks):
+    def find_workers_murmuration(self, job, current_time):
+        if job.num_tasks != len(job.cpu_reqs_by_tasks):
             raise AssertionError('Number of tasks provided not equal to length of cpu_reqs_by_tasks list')
         global placement_total_time
         est_time_machine_array = numpy.zeros(shape=(TOTAL_MACHINES))
         cores_lists_for_reqs_to_machine_matrix = collections.defaultdict()
         # best_fit_for_tasks = (ma, mb, .... )
-        best_fit_for_tasks = BitMap()
+        best_fit_for_tasks = set()
         current_time += NETWORK_DELAY
         get_machine_time = keeper.get_machine_est_wait
         machines = self.machines
         placement_start_time = time.time()
-        for task_index in xrange(num_tasks):
-            cpu_req = cpu_reqs_by_tasks[task_index]
+        for task_index in xrange(job.num_tasks):
+            cpu_req = job.cpu_reqs_by_tasks[task_index]
             for machine_id in xrange(TOTAL_MACHINES):
-                est_time, core_list = get_machine_time(self.machines[machine_id].cores, cpu_req, current_time, task_actual_durations[task_index])
+                est_time, core_list = get_machine_time(self.machines[machine_id].cores, cpu_req, current_time, job.actual_task_duration[task_index])
                 est_time_machine_array[machine_id] = est_time
                 cores_lists_for_reqs_to_machine_matrix[machine_id] = core_list
             best_fit_time = int(numpy.sort(est_time_machine_array)[0])
@@ -647,13 +640,13 @@ class Simulation(object):
             cores_at_chosen_machine = cores_lists_for_reqs_to_machine_matrix[chosen_machine]
             if len(cores_at_chosen_machine) != cpu_req:
                 raise AssertionError("Not enough machines that pass filter requirement of job")
-            #print"Choosing machine", chosen_machine,":[",cores_at_chosen_machine,"] with best fit time ",best_fit_time,"for task #", task_index, " task_duration", task_actual_durations[task_index]," arrival time ", current_time, "requesting", cpu_req, "cores"
+            #print"Choosing machine", chosen_machine,":[",cores_at_chosen_machine,"] with best fit time ",best_fit_time,"for task #", task_index, " task_duration", job.actual_task_duration[task_index]," arrival time ", current_time, "requesting", cpu_req, "cores"
             best_fit_for_tasks.add(chosen_machine)
 
             #Update est time at this machine and its cores
-            probe_params = [cores_at_chosen_machine, job_id, task_index, current_time]
+            probe_params = [cores_at_chosen_machine, job.id, task_index, current_time]
             self.machines[chosen_machine].add_machine_probe(best_fit_time, probe_params)
-            keeper.update_worker_queues_free_time(cores_at_chosen_machine, best_fit_time, best_fit_time + int(math.ceil(task_actual_durations[task_index])), current_time)
+            keeper.update_worker_queues_free_time(cores_at_chosen_machine, best_fit_time, best_fit_time + int(math.ceil(job.actual_task_duration[task_index])), current_time)
         cores_lists_for_reqs_to_machine_matrix.clear()
         placement_total_time += time.time() - placement_start_time
         return best_fit_for_tasks
@@ -690,22 +683,19 @@ class Simulation(object):
         self.jobs[job.id] = job
         task_arrival_events = []
  
-        # scheduler_index denotes the exactly one scheduler node ID where this job request lands.
-        scheduler_index = worker_indices[0]
-        scheduler = self.workers[scheduler_index].scheduler
-
         # Some safety checks
         if len(worker_indices) != 1:
             raise AssertionError('Murmuration received more than one scheduler for the job?')
-        if scheduler is None:
-            raise AssertionError('Murmuration received a None scheduler?')
+        # scheduler_index denotes the exactly one scheduler node ID where this job request lands.
+        # Currently unused information.
+        scheduler_index = worker_indices[0]
 
         # Sort all workers running long jobs in this DC according to their estimated times.
         # Ranking policy used - Least estimated time and hole duration > estimted task time.
         # Find machines for tasks and trigger events.
         # Returns a set of machines to service tasks of the job - (m1, m2, ...).
         # May be less than the number of tasks due to same machines hosting more than one task.
-        machine_indices = self.find_workers_long_job_prio_murmuration(job.id, job.num_tasks, current_time, job.cpu_reqs_by_tasks, job.actual_task_duration)
+        machine_indices = self.find_workers_murmuration(job, current_time)
         current_time += NETWORK_DELAY
         # Return task arrival events for long jobs
         for machine_id in machine_indices:
