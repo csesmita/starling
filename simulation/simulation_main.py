@@ -274,8 +274,18 @@ class ClusterStatusKeeper(object):
             raise AssertionError('Error in update_worker_queues_free_time - best fit start happened before insertion into core queues')
 
         # Cleanup stale holes
-        # TODO - Ensure holes are always ordered by time
         for worker_index in worker_indices:
+            ############## TESTING ###################
+            # Ensure holes are always ordered by time
+            start_list = self.worker_queues_free_time_start[worker_index]
+            res = all(i < j for i, j in zip(start_list, start_list[1:]))
+            if not res:
+                raise AssertionError('Starting holes not ordered in ascending order')
+            end_list = self.worker_queues_free_time_end[worker_index]
+            res = all(i < j for i, j in zip(end_list, end_list[1:]))
+            if not res:
+                raise AssertionError('Ending holes not ordered in ascending order')
+            ############## TESTING ###################
             while len(self.worker_queues_free_time_start[worker_index]) > 0:
                 if current_time > self.worker_queues_free_time_end[worker_index][0]:
                     #Cull this hole. No point keeping it around now.
@@ -490,13 +500,12 @@ class Machine(object):
 
             # Extract all information
             core_indices = task_info[0]
-            assert len(core_indices) == 0
+            if len(core_indices) != 0:
+                raise AssertionError('Sparrow coming with pre-assigned cores?')
             job_id = task_info[1]
             if not job_id in simulation.jobs.keys():
                 continue
             job = simulation.jobs[job_id]
-            if len(job.unscheduled_tasks) <= 0:
-                raise AssertionError('No redundant probes in Murmuration, yet tasks have finished?')
             task_index = task_info[2]
             probe_arrival_time = task_info[3]
             task_actual_duration = job.actual_task_duration[task_index]
