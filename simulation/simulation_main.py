@@ -825,7 +825,7 @@ class Simulation(object):
         time_elapsed_in_dc = current_time - first_time
         print "Total time elapsed in the DC is", time_elapsed_in_dc, "s" 
         utilization = 100 * (float(total_busyness) / float(time_elapsed_in_dc * TOTAL_MACHINES*CORES_PER_MACHINE))
-        print "Average utilization in ", SYSTEM_SIMULATED, " with ", TOTAL_MACHINES,"machines and ",CORES_PER_MACHINE, " cores/machine is ", utilization
+        print "Average utilization in ", SYSTEM_SIMULATED, " with ", TOTAL_MACHINES,"machines and ",CORES_PER_MACHINE, " cores/machine with decentralized?", DECENTRALIZED,"system is ", utilization
 
 #####################################################################################################################
 #globals
