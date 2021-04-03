@@ -148,9 +148,44 @@ class ClusterStatusKeeper(object):
     def __init__(self, num_workers):
         self.worker_queues_free_time_end = {}
         self.worker_queues_free_time_start = {}
+        #Array of history in order to simulate delayed updates
+        self.worker_queues_history = collections.defaultdict(collections.defaultdict)
         for i in xrange(0, num_workers):
            self.worker_queues_free_time_start[i] = [0]
            self.worker_queues_free_time_end[i] = [float('inf')]
+           #History will be {insertion_time: [start_task_time, end_task_time]} format
+           self.worker_queues_history[i] = collections.defaultdict(list)
+
+    def adjust_propagation_delay(self, core_id, current_time):
+        time_start = self.worker_queues_free_time_start[core_id]
+        time_end = self.worker_queues_free_time_end[core_id]
+        if not DECENTRALIZED:
+            return time_start, time_end
+        #Adjustment for DECENTRALIZED system
+        time_limit = current_time - PROTOCOL_DELAY
+        for history_time, history_hole in self.worker_queues_history[core_id].items():
+            if history_time < time_limit:
+                continue
+            history_start_hole = history_hole[0]
+            history_end_hole = history_hole[1]
+            for hole_index in xrange(len(time_start)):
+                if time_end[hole_index] < history_start_hole:
+                    continue
+                if time_start[hole_index] <= history_start_hole and history_start_hole < time_end[hole_index]:
+                    raise AssertionError('History holes are currently not occupied!')
+                #Here, time_start > history_start_hole or time_end == history_start_hole
+                if time_start[hole_index] > history_start_hole:
+                    if time_start[hole_index] == history_end_hole:
+                        time_start.pop(hole_index)
+                        time_start.insert(hole_index, history_start_hole)
+                    else:
+                        time_start.insert(hole_index, history_start_hole)
+                        time_end.insert(hole_index, history_end_hole)
+                if time_end[hole_index] == history_start_hole:
+                    time_end.pop(hole_index)
+                    time_end.insert(hole_index, history_end_hole)
+                break
+        return time_start, time_end
 
     # ClusterStatusKeeper class
     # get_machine_est_wait() -
@@ -178,8 +213,7 @@ class ClusterStatusKeeper(object):
         inf_hole_start = {}
         for core in cores:
             core_id = core.id
-            time_start = self.worker_queues_free_time_start[core_id]
-            time_end = self.worker_queues_free_time_end[core_id]
+            time_start, time_end = self.adjust_propagation_delay(core_id, arrival_time)
             if len(time_end) != len(time_start):
                 raise AssertionError('Error in get_machine_est_wait - mismatch in lengths of start and end hole arrays')
             for hole in xrange(len(time_end)):
@@ -278,10 +312,10 @@ class ClusterStatusKeeper(object):
             ############## TESTING ###################
             # Ensure holes are always ordered by time
             start_list = self.worker_queues_free_time_start[worker_index]
+            end_list = self.worker_queues_free_time_end[worker_index]
             res = all(i < j for i, j in zip(start_list, start_list[1:]))
             if not res:
                 raise AssertionError('Starting holes not ordered in ascending order')
-            end_list = self.worker_queues_free_time_end[worker_index]
             res = all(i < j for i, j in zip(end_list, end_list[1:]))
             if not res:
                 raise AssertionError('Ending holes not ordered in ascending order')
@@ -293,6 +327,9 @@ class ClusterStatusKeeper(object):
                     self.worker_queues_free_time_end[worker_index].pop(0)
                 else:
                     break
+            for history_time in self.worker_queues_history.keys():
+                if current_time - PROTOCOL_DELAY > history_time:
+                    del self.worker_queues_history[history_time]
 
         for worker_index in worker_indices:
                 #Subtract
@@ -320,6 +357,8 @@ class ClusterStatusKeeper(object):
                             self.worker_queues_free_time_start[worker_index].insert(insert_position, best_fit_end)
                             self.worker_queues_free_time_end[worker_index].insert(insert_position, end_hole)
                         #print "Updated holes at worker", worker_index," is ", self.worker_queues_free_time_start[worker_index], self.worker_queues_free_time_end[worker_index]
+                        self.worker_queues_history[worker_index][current_time] = [best_fit_start , best_fit_end]
+
                         break
 
                 if found_hole == False:
@@ -797,7 +836,7 @@ NETWORK_DELAY = 0.0005
 job_count = 1
 
 random.seed(123456798)
-if(len(sys.argv) != 7):
+if(len(sys.argv) != 8):
     print "Incorrent number of parameters."
     sys.exit(1)
 
@@ -808,8 +847,14 @@ WORKLOAD_FILE                   = sys.argv[1]
 CORES_PER_MACHINE               = int(sys.argv[2])
 PROBE_RATIO                     = int(sys.argv[3])
 TOTAL_MACHINES                  = int(sys.argv[4])
-SYSTEM_SIMULATED                = sys.argv[5]  
-POLICY                          = sys.argv[6]              #RANDOM, LEAST_LEFTOVER, MOST_LEFTOVER
+SYSTEM_SIMULATED                = sys.argv[5]
+POLICY                          = sys.argv[6]                      #RANDOM, LEAST_LEFTOVER, MOST_LEFTOVER
+DECENTRALIZED                   = (sys.argv[7] == "DECENTRALIZED") #CENTRALIZED, DECENTRALIZED
+
+PROTOCOL_DELAY = 0
+TOPOLOGY_HOPS = 20
+if DECENTRALIZED:
+    PROTOCOL_DELAY = TOPOLOGY_HOPS * NETWORK_DELAY
 
 t1 = time.time()
 keeper = ClusterStatusKeeper(TOTAL_MACHINES * CORES_PER_MACHINE)
