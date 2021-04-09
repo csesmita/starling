@@ -13,6 +13,7 @@ import Queue
 import operator
 import collections
 import numpy
+import copy
 
 from gc import collect
 
@@ -156,13 +157,14 @@ class ClusterStatusKeeper(object):
            #History will be {insertion_time: [start_task_time, end_task_time]} format
            self.worker_queues_history[i] = collections.defaultdict(list)
 
-    def adjust_propagation_delay(self, core_id, current_time):
-        time_start = self.worker_queues_free_time_start[core_id]
-        time_end = self.worker_queues_free_time_end[core_id]
-        if not DECENTRALIZED:
-            return time_start, time_end
+    def adjust_propagation_delay(self, core_id, current_time, delay):
+        if not delay:
+            return self.worker_queues_free_time_start[core_id], self.worker_queues_free_time_end[core_id]
         #Adjustment for DECENTRALIZED system
         time_limit = current_time - PROTOCOL_DELAY
+        copied = False
+        time_start = (self.worker_queues_free_time_start[core_id])
+        time_end = (self.worker_queues_free_time_end[core_id])
         for history_time, history_hole in self.worker_queues_history[core_id].items():
             if history_time < time_limit:
                 continue
@@ -172,8 +174,13 @@ class ClusterStatusKeeper(object):
                 if time_end[hole_index] < history_start_hole:
                     continue
                 if time_start[hole_index] <= history_start_hole and history_start_hole < time_end[hole_index]:
+                    print "Core", core_id,": History hole", history_start_hole, history_end_hole, "current hole", time_start[hole_index], time_end[hole_index]
                     raise AssertionError('History holes are currently not occupied!')
                 #Here, time_start > history_start_hole or time_end == history_start_hole
+                if not copied:
+                    time_start = copy.deepcopy(self.worker_queues_free_time_start[core_id])
+                    time_end = copy.deepcopy(self.worker_queues_free_time_end[core_id])
+                    copied = True
                 if time_start[hole_index] > history_start_hole:
                     if time_start[hole_index] == history_end_hole:
                         time_start.pop(hole_index)
@@ -184,6 +191,10 @@ class ClusterStatusKeeper(object):
                 if time_end[hole_index] == history_start_hole:
                     time_end.pop(hole_index)
                     time_end.insert(hole_index, history_end_hole)
+                #Collapse holes if need be
+                if (hole_index < len(time_end) - 1) and time_end[hole_index] == time_start[hole_index + 1]:
+                    time_end.pop(hole_index)
+                    time_start.pop(hole_index + 1)
                 break
         return time_start, time_end
 
@@ -193,7 +204,7 @@ class ClusterStatusKeeper(object):
     # Returns - ([est_task1, est_task2, ...],[[list of cores],[list of core], [],...])
     # Might return smaller values for smaller cpu req, even if those requests come in later.
     # Also, converts holes to ints except the last entry in end which is float('inf')
-    def get_machine_est_wait(self, cores, cpu_req, arrival_time, task_duration):
+    def get_machine_est_wait(self, cores, cpu_req, arrival_time, task_duration, delay):
         num_cores = len(cores)
         if num_cores < cpu_req:
             return (float('inf'), [])
@@ -213,7 +224,7 @@ class ClusterStatusKeeper(object):
         inf_hole_start = {}
         for core in cores:
             core_id = core.id
-            time_start, time_end = self.adjust_propagation_delay(core_id, arrival_time)
+            time_start, time_end = self.adjust_propagation_delay(core_id, arrival_time, delay)
             if len(time_end) != len(time_start):
                 raise AssertionError('Error in get_machine_est_wait - mismatch in lengths of start and end hole arrays')
             for hole in xrange(len(time_end)):
@@ -267,7 +278,7 @@ class ClusterStatusKeeper(object):
                     else:
                         raise AssertionError('Check the name of the policy')
                     cores_list = set(dict(sorted_cores_fragmented).keys())
-                #print "Earliest start time for task", index," (duration - ", task_duration,") needing", cpu_req,"cores is ", start_time, "with cores", cores_list
+                #print "Earliest start time for task duration", task_duration,"needing", cpu_req,"cores is ", start_time, "with cores", cores_list 
                 # cpu_req is available when the fastest cpu_req number of cores is
                 # available for use at or after arrival_time.
                 return (start_time, cores_list)
@@ -301,7 +312,7 @@ class ClusterStatusKeeper(object):
                     break
 
     #Remove outdated holes
-    def update_worker_queues_free_time(self, worker_indices, best_fit_start, best_fit_end, current_time):
+    def update_worker_queues_free_time(self, worker_indices, best_fit_start, best_fit_end, current_time, delay):
         if best_fit_start >= best_fit_end:
             raise AssertionError('Error in update_worker_queues_free_time - best fit start larger than or equal to best fit end')
         if current_time > best_fit_start:
@@ -327,9 +338,10 @@ class ClusterStatusKeeper(object):
                     self.worker_queues_free_time_end[worker_index].pop(0)
                 else:
                     break
-            for history_time in self.worker_queues_history.keys():
+            history = self.worker_queues_history[worker_index]
+            for history_time in history.keys():
                 if current_time - PROTOCOL_DELAY > history_time:
-                    del self.worker_queues_history[history_time]
+                    del history[history_time]
 
         for worker_index in worker_indices:
                 #Subtract
@@ -361,8 +373,16 @@ class ClusterStatusKeeper(object):
 
                         break
 
-                if found_hole == False:
-                    raise AssertionError('No hole was found for best fit start and end')
+                if found_hole == False and not delay:
+                    print "Could not find hole for worker", str(worker_index), "for best fit times ", best_fit_start, best_fit_end, " its holes being", self.worker_queues_free_time_start[worker_index], self.worker_queues_free_time_end[worker_index], "and history", self.worker_queues_history[worker_index]
+                    raise AssertionError('No hole was found for best fit start and end at worker ' + str(worker_index))
+                elif found_hole == False:
+                    task_duration = best_fit_end - best_fit_start
+                    cpu_req = len(worker_indices)
+                    machine_id = simulation.get_machine_id_from_worker_id(worker_index)
+                    est_time, core_list = keeper.get_machine_est_wait(simulation.machines[machine_id].cores, cpu_req, current_time, task_duration, False)
+                    keeper.update_worker_queues_free_time(core_list, est_time, est_time + task_duration, current_time, False)
+
                 if len(self.worker_queues_free_time_start[worker_index]) != len(self.worker_queues_free_time_end[worker_index]):
                     raise AssertionError('Lengths of start and end holes are unequal')
                 if len(set(self.worker_queues_free_time_start[worker_index])) != len(self.worker_queues_free_time_start[worker_index]):
@@ -672,13 +692,13 @@ class Simulation(object):
         # best_fit_for_tasks = (ma, mb, .... )
         best_fit_for_tasks = set()
         current_time += NETWORK_DELAY
-        get_machine_time = keeper.get_machine_est_wait
         machines = self.machines
         placement_start_time = time.time()
+        delay = True if DECENTRALIZED else False
         for task_index in xrange(job.num_tasks):
             cpu_req = job.cpu_reqs_by_tasks[task_index]
             for machine_id in xrange(TOTAL_MACHINES):
-                est_time, core_list = get_machine_time(self.machines[machine_id].cores, cpu_req, current_time, job.actual_task_duration[task_index])
+                est_time, core_list = keeper.get_machine_est_wait(self.machines[machine_id].cores, cpu_req, current_time, job.actual_task_duration[task_index], delay)
                 est_time_machine_array[machine_id] = est_time
                 cores_lists_for_reqs_to_machine_matrix[machine_id] = core_list
             best_fit_time = int(numpy.sort(est_time_machine_array)[0])
@@ -694,7 +714,7 @@ class Simulation(object):
             #Update est time at this machine and its cores
             probe_params = [cores_at_chosen_machine, job.id, task_index, current_time]
             self.machines[chosen_machine].add_machine_probe(best_fit_time, probe_params)
-            keeper.update_worker_queues_free_time(cores_at_chosen_machine, best_fit_time, best_fit_time + int(math.ceil(job.actual_task_duration[task_index])), current_time)
+            keeper.update_worker_queues_free_time(cores_at_chosen_machine, best_fit_time, best_fit_time + int(math.ceil(job.actual_task_duration[task_index])), current_time, delay)
         cores_lists_for_reqs_to_machine_matrix.clear()
         placement_total_time += time.time() - placement_start_time
         return best_fit_for_tasks
