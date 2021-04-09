@@ -104,8 +104,6 @@ class JobArrival(Event, file):
             # worker_indices for Murmuration only indicates the
             # scheduler. send_probes() does both worker selection and
             # sending probe requests.
-            # TODO - Follow the pattern of rest of the schedulers and 
-            # have the worker selection logic here.
             worker_indices.append(random.choice(simulation.scheduler_indices))
             if self.job.id % 100 == 0:
                 print current_time, ":   Big Job arrived!!", self.job.id, " num tasks ", self.job.num_tasks, " estimated_duration ", self.job.estimated_task_duration, "simulation time", time.time() - t1
@@ -276,7 +274,7 @@ class ClusterStatusKeeper(object):
                         #Select cores with smallest available hole after allocation
                         sorted_cores_fragmented = sorted(cores_fragmented.items(), key=operator.itemgetter(1), reverse=False)[0:cpu_req]
                     else:
-                        raise AssertionError('Check the name of the policy')
+                        raise AssertionError('Check the name of the policy. Should be RANDOM, MOST_LEFTOVER OR LEAST_LEFTOVER')
                     cores_list = set(dict(sorted_cores_fragmented).keys())
                 #print "Earliest start time for task duration", task_duration,"needing", cpu_req,"cores is ", start_time, "with cores", cores_list 
                 # cpu_req is available when the fastest cpu_req number of cores is
@@ -320,6 +318,7 @@ class ClusterStatusKeeper(object):
 
         # Cleanup stale holes
         for worker_index in worker_indices:
+            '''
             ############## TESTING ###################
             # Ensure holes are always ordered by time
             start_list = self.worker_queues_free_time_start[worker_index]
@@ -331,6 +330,7 @@ class ClusterStatusKeeper(object):
             if not res:
                 raise AssertionError('Ending holes not ordered in ascending order')
             ############## TESTING ###################
+            '''
             while len(self.worker_queues_free_time_start[worker_index]) > 0:
                 if current_time > self.worker_queues_free_time_end[worker_index][0]:
                     #Cull this hole. No point keeping it around now.
@@ -872,7 +872,8 @@ POLICY                          = sys.argv[6]                      #RANDOM, LEAS
 DECENTRALIZED                   = (sys.argv[7] == "DECENTRALIZED") #CENTRALIZED, DECENTRALIZED
 
 PROTOCOL_DELAY = 0
-TOPOLOGY_HOPS = 20
+# Leaf - Tor - Spine - Tor - Leaf
+TOPOLOGY_HOPS = 4
 if DECENTRALIZED:
     PROTOCOL_DELAY = TOPOLOGY_HOPS * NETWORK_DELAY
 
