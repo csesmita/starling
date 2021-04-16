@@ -36,7 +36,7 @@ import sys
 import numpy as np
 import operator
 
-if(len(sys.argv) != 7):
+if(len(sys.argv) != 5):
     print "Incorrent number of parameters."
     sys.exit(1)
 
@@ -53,6 +53,7 @@ for line in infile:
         #Copy the line over as is
         utilization = line
         continue
+
 
     runningtime = float((line.split('total_job_running_time: ')[1]).split()[0])
     jobid = int(((line.split('job_id ')[1]).split())[0])
@@ -73,7 +74,7 @@ schedulertime.sort()
 waittime.sort()
 processingtime.sort()
 if len(jobrunningtime) > 0:
-    outfile = open(sys.argv[2].lower()+"_"+sys.argv[3]+"_"+sys.argv[4]+"_"+sys.argv[5]+"_"+sys.argv[6].lower(), 'a+')
+    outfile = open(sys.argv[2].lower()+"_"+sys.argv[3]+"_"+sys.argv[4], 'a+')
     outfile.write("%s\t%s\t(%s\t%s\t%s)\n"% ("Cluster Size ", sys.argv[4], "(Scheduler Time", "Task Wait Time", "Task Processing Time)"))
     outfile.write("%s\t%s\t(%s\t%s\t%s)\n"% ("50th percentile: ",  np.percentile(jobrunningtime, 50), np.percentile(schedulertime, 50), np.percentile(waittime, 50), np.percentile(processingtime, 50))) 
     outfile.write("%s\t%s\t(%s\t%s\t%s)\n" % ("90th percentile: ", np.percentile(jobrunningtime, 90), np.percentile(schedulertime, 90), np.percentile(waittime, 90), np.percentile(processingtime, 90))) 

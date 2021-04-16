@@ -793,7 +793,7 @@ class Simulation(object):
             self.jobs_completed += 1
             # Task's total time = Scheduler queue time (=0) + Scheduler Algorithm time + Machine queue wait time + Task processing time
             try:
-                print >> finished_file, task_completion_time," estimated_task_duration: ",job.estimated_task_duration, " by_def: 0", " total_job_running_time: ",(job.end_time - job.start_time), " job_id", job_id, " scheduler_algorithm_time ", scheduler_algorithm_time, " task_wait_time ", task_wait_time, " task_processing_time ", task_duration
+                print >> finished_file, task_completion_time," estimated_task_duration: ",job.estimated_task_duration, " total_job_running_time: ",(job.end_time - job.start_time), " job_id", job_id, " scheduler_algorithm_time ", scheduler_algorithm_time, " task_wait_time ", task_wait_time, " task_processing_time ", task_duration
             except IOError, e:
                 print "Failed writing to output file due to ", e
 
@@ -845,7 +845,7 @@ class Simulation(object):
         time_elapsed_in_dc = current_time - first_time
         print "Total time elapsed in the DC is", time_elapsed_in_dc, "s" 
         utilization = 100 * (float(total_busyness) / float(time_elapsed_in_dc * TOTAL_MACHINES*CORES_PER_MACHINE))
-        print "Average utilization in ", SYSTEM_SIMULATED, " with ", TOTAL_MACHINES,"machines and ",CORES_PER_MACHINE, " cores/machine with decentralized?", DECENTRALIZED,"system is ", utilization
+        print "Average utilization in ", SYSTEM_SIMULATED, " with ", TOTAL_MACHINES,"machines and ",CORES_PER_MACHINE, " cores/machine ", POLICY,    " hole fitting policy and", sys.argv[7],"system is ", utilization
 
 #####################################################################################################################
 #globals
@@ -874,9 +874,8 @@ TOPOLOGY_HOPS = 4
 if DECENTRALIZED:
     PROTOCOL_DELAY = TOPOLOGY_HOPS * NETWORK_DELAY
 
-system_str = "d" if DECENTRALIZED else "c"
 #log_file is 'finished_file' + "_" + TOTAL_MACHINES + "_" + CORES_PER_MACHINE + "_" + system_str
-file_name = ['finished_file', sys.argv[4], sys.argv[2], system_str]
+file_name = ['finished_file', sys.argv[2], sys.argv[4], sys.argv[5], sys.argv[6], sys.argv[7]]
 separator = '_'
 log_file = (separator.join(file_name))
 finished_file   = open(log_file, 'w')
@@ -886,11 +885,11 @@ keeper = ClusterStatusKeeper(TOTAL_MACHINES * CORES_PER_MACHINE)
 simulation = Simulation(WORKLOAD_FILE, TOTAL_MACHINES)
 simulation.run()
 
-print "Simulation ended in ", (time.time() - t1), " s "
+simulation_time = (time.time() - t1)
+print "Simulation ended in ", simulation_time, " s "
 print "Placement total time ", placement_total_time
-print >> finished_file, "Average utilization in ", SYSTEM_SIMULATED, " with ", TOTAL_MACHINES,"machines and ",CORES_PER_MACHINE, " cores/machine ", POLICY," hole fitting policy is ", utilization
+print >> finished_file, "Average utilization in ", SYSTEM_SIMULATED, " with ", TOTAL_MACHINES,"machines and ",CORES_PER_MACHINE, " cores/machine ", POLICY, " hole fitting policy and", sys.argv[7],"system is ", utilization, "(simulation time :" , simulation_time, ")"
 
 finished_file.close()
-
 # Generate CDF data
-import os; os.system("pypy process.py " + log_file + " " + SYSTEM_SIMULATED + " " + WORKLOAD_FILE + " " + str(TOTAL_MACHINES))
+import os; os.system("pypy process.py " + log_file + " " + SYSTEM_SIMULATED + " " + WORKLOAD_FILE + " " + str(TOTAL_MACHINES)); os.remove(log_file)
