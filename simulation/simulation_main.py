@@ -849,9 +849,6 @@ class Simulation(object):
 
 #####################################################################################################################
 #globals
-
-finished_file   = open('finished_file', 'w')
-
 NETWORK_DELAY = 0.0005
 job_count = 1
 
@@ -877,6 +874,13 @@ TOPOLOGY_HOPS = 4
 if DECENTRALIZED:
     PROTOCOL_DELAY = TOPOLOGY_HOPS * NETWORK_DELAY
 
+system_str = "d" if DECENTRALIZED else "c"
+#log_file is 'finished_file' + "_" + TOTAL_MACHINES + "_" + CORES_PER_MACHINE + "_" + system_str
+file_name = ['finished_file', sys.argv[4], sys.argv[2], system_str]
+separator = '_'
+log_file = (separator.join(file_name))
+finished_file   = open(log_file, 'w')
+
 t1 = time.time()
 keeper = ClusterStatusKeeper(TOTAL_MACHINES * CORES_PER_MACHINE)
 simulation = Simulation(WORKLOAD_FILE, TOTAL_MACHINES)
@@ -889,4 +893,4 @@ print >> finished_file, "Average utilization in ", SYSTEM_SIMULATED, " with ", T
 finished_file.close()
 
 # Generate CDF data
-import os; os.system("python process.py finished_file "+ SYSTEM_SIMULATED + " " + "long" + " " + WORKLOAD_FILE + " " + str(TOTAL_MACHINES))
+import os; os.system("pypy process.py " + log_file + " " + SYSTEM_SIMULATED + " " + WORKLOAD_FILE + " " + str(TOTAL_MACHINES))
