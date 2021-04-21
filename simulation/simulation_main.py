@@ -12,7 +12,6 @@ import random
 import Queue
 import operator
 import collections
-import numpy
 import copy
 
 from gc import collect
@@ -148,7 +147,7 @@ class ClusterStatusKeeper(object):
         self.worker_queues_free_time_end = {}
         self.worker_queues_free_time_start = {}
         #Array of history in order to simulate delayed updates
-        self.worker_queues_history = collections.defaultdict(collections.defaultdict)
+        self.worker_queues_history = {}
         for i in xrange(0, num_workers):
            self.worker_queues_free_time_start[i] = [0]
            self.worker_queues_free_time_end[i] = [float('inf')]
@@ -218,7 +217,7 @@ class ClusterStatusKeeper(object):
         all_slots_list = set()
         all_slots_list_add = all_slots_list.add
         all_slots_list_cores = collections.defaultdict(set)
-        all_slots_fragmentation = collections.defaultdict(collections.defaultdict)
+        all_slots_fragmentation = collections.defaultdict(dict)
         inf_hole_start = {}
         for core in cores:
             core_id = core.id
@@ -236,9 +235,9 @@ class ClusterStatusKeeper(object):
                 start = time_start[hole] if arrival_time <= time_start[hole] else arrival_time
                 if time_end[hole] != float('inf'):
                     # Find all possible holes at every granularity, each lasting task_duration time.
-                    time_granularity = 1
                     end = time_end[hole] - task_duration + 1
-                    arr = xrange(start, end, time_granularity)
+                    #time granularity of 1.
+                    arr = xrange(start, end, 1)
                     for start_chunk in arr:
                         #print "[t=",arrival_time,"] For core ", core_id," fitting task of duration", task_duration,"into hole = ", time_start[hole], time_end[hole], "starting at", start_chunk
                         all_slots_list_add(start_chunk)
@@ -392,7 +391,7 @@ class ClusterStatusKeeper(object):
 
 #####################################################################################################################
 #####################################################################################################################
-class TaskEndEventForMachines():
+class TaskEndEventForMachines(object):
     def __init__(self, worker_index, task_duration):
         self.worker_index = worker_index
         self.task_duration = task_duration
@@ -687,7 +686,6 @@ class Simulation(object):
         if job.num_tasks != len(job.cpu_reqs_by_tasks):
             raise AssertionError('Number of tasks provided not equal to length of cpu_reqs_by_tasks list')
         global placement_total_time
-        est_time_machine_array = numpy.zeros(shape=(TOTAL_MACHINES))
         cores_lists_for_reqs_to_machine_matrix = collections.defaultdict()
         # best_fit_for_tasks = (ma, mb, .... )
         best_fit_for_tasks = set()
@@ -696,15 +694,17 @@ class Simulation(object):
         placement_start_time = time.time()
         delay = True if DECENTRALIZED else False
         for task_index in xrange(job.num_tasks):
+            best_fit_time = float('inf')
+            chosen_machine = None
             cpu_req = job.cpu_reqs_by_tasks[task_index]
             for machine_id in xrange(TOTAL_MACHINES):
                 est_time, core_list = keeper.get_machine_est_wait(self.machines[machine_id].cores, cpu_req, current_time, job.actual_task_duration[task_index], delay)
-                est_time_machine_array[machine_id] = est_time
                 cores_lists_for_reqs_to_machine_matrix[machine_id] = core_list
-            best_fit_time = int(numpy.sort(est_time_machine_array)[0])
-            if best_fit_time == float('inf'):
+                if est_time < best_fit_time:
+                    best_fit_time = est_time
+                    chosen_machine = machine_id
+            if best_fit_time == float('inf') or chosen_machine == None:
                 raise AssertionError('Error - Got best fit time that is infinite!')
-            chosen_machine = numpy.where(est_time_machine_array == best_fit_time)[0][0]
             cores_at_chosen_machine = cores_lists_for_reqs_to_machine_matrix[chosen_machine]
             if len(cores_at_chosen_machine) != cpu_req:
                 raise AssertionError("Not enough machines that pass filter requirement of job")
@@ -854,7 +854,7 @@ job_count = 1
 
 random.seed(123456798)
 if(len(sys.argv) != 8):
-    print "Incorrent number of parameters."
+    print "Incorrect number of parameters. Got", sys.argv
     sys.exit(1)
 
 utilization = 0
