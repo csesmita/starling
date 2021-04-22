@@ -65,11 +65,20 @@ class Job(object):
                #self.cpu_avg_per_task.appendleft(float(job_args[3 + i + 2*self.num_tasks]))
                #self.cpu_max_per_task.appendleft(float(job_args[3 + i + 3*self.num_tasks]))
            else:
+               # For Yahoo workload.
                # HACK! Instead of changing traces file, make this value multi core instead
-               cores_needed += 1
-               self.cpu_reqs_by_tasks.appendleft(cores_needed)
-               if cores_needed == CORES_PER_MACHINE:
-                   cores_needed = 0
+               if CORE_DISTRIBUTION == "STATIC":
+                   cores_needed += 1
+                   self.cpu_reqs_by_tasks.appendleft(cores_needed)
+                   if cores_needed == CORES_PER_MACHINE:
+                       cores_needed = 0
+               elif CORE_DISTRIBUTION == "GAUSSIAN":
+                   cores_needed = float('inf')
+                   #Cap number of cores
+                   while cores_needed > 128 or cores_needed < 2:
+                       cores_needed = pow(2,int(random.gauss(CORES_PER_MACHINE, CORE_DISTRIBUTION_DEVIATION)))
+                   self.cpu_reqs_by_tasks.appendleft(cores_needed)
+
         if len(self.unscheduled_tasks) != self.num_tasks:
             raise AssertionError('file_task_execution_time(): Number of unscheduled tasks is not the same as number of tasks')
 
@@ -382,7 +391,7 @@ class ClusterStatusKeeper(object):
                 elif found_hole == False:
                     task_duration = best_fit_end - best_fit_start
                     cpu_req = len(worker_indices)
-                    machine_id = simulation.get_machine_id_from_worker_id(worker_index)
+                    machine_id = simulation.workers[worker_index].machine_id
                     est_time, core_list = keeper.get_machine_est_wait(simulation.machines[machine_id].cores, cpu_req, current_time, task_duration, False, float('inf'))
                     keeper.update_worker_queues_free_time(core_list, est_time, est_time + task_duration, current_time, False)
 
@@ -412,14 +421,14 @@ class TaskEndEventForMachines(object):
 # Support for multi-core machines in Murmuration
 # Core = Worker class
 class Machine(object):
-    def __init__(self, num_slots, id):
-        self.num_cores = num_slots
+    def __init__(self, num_cores, id, worker_id_start):
+        self.num_cores = num_cores
         self.id = id
 
         self.cores = []
         while len(self.cores) < self.num_cores:
-            core_id = self.id * CORES_PER_MACHINE + len(self.cores)
-            core = Worker(1, core_id)
+            core_id = worker_id_start + len(self.cores)
+            core = Worker(core_id, self.id)
             self.cores.append(core)
 
         # Dictionary of core and time when it was freed (used to track the time the core spent idle).
@@ -604,8 +613,9 @@ class Machine(object):
 #####################################################################################################################
 # This class denotes a single core on a machine.
 class Worker(object):
-    def __init__(self, num_slots, id):
+    def __init__(self, id, machine_id):
         self.id = id
+        self.machine_id = machine_id
         # Parameter to measure how long this worker is busy in the total run.
         self.busy_time = 0.0
 
@@ -618,8 +628,7 @@ class Worker(object):
     #Worker class
     # In Murmuration, free_slot will report the same to the machine class.
     def free_slot(self, current_time):
-        machine_id = simulation.get_machine_id_from_worker_id(self.id)
-        machine = simulation.machines[machine_id]
+        machine = simulation.machines[self.machine_id]
         return machine.free_machine_core(self, current_time)
 
 #####################################################################################################################
@@ -628,7 +637,6 @@ class Worker(object):
 class Simulation(object):
     def __init__(self, WORKLOAD_FILE, nr_workers):
         TOTAL_MACHINES = int(nr_workers)
-        self.total_free_slots = CORES_PER_MACHINE * TOTAL_MACHINES
         self.jobs = {}
         self.event_queue = Queue.PriorityQueue()
         self.workers = []
@@ -637,7 +645,14 @@ class Simulation(object):
 
         # Murmuration and Sparrow 
         while len(self.machines) < TOTAL_MACHINES:
-            machine = Machine(CORES_PER_MACHINE, len(self.machines))
+            cores_needed = float('inf')
+            if CORE_DISTRIBUTION == "STATIC":
+                cores_needed = CORES_PER_MACHINE
+            elif CORE_DISTRIBUTION == "GAUSSIAN":
+                #Cap number of cores
+                while cores_needed > 128 or cores_needed < 2:
+                   cores_needed = pow(2,int(random.gauss(CORES_PER_MACHINE, CORE_DISTRIBUTION_DEVIATION)))
+            machine = Machine(cores_needed, len(self.machines), len(self.workers))
             self.machines.append(machine)
             workers = machine.cores
             self.workers.extend(workers)
@@ -648,16 +663,10 @@ class Simulation(object):
         if SYSTEM_SIMULATED == "Murmuration":
             print "Number of schedulers ", len(self.scheduler_indices)
 
-        self.worker_indices = range(TOTAL_MACHINES)
-
         self.jobs_scheduled = 0
         self.jobs_completed = 0
         self.scheduled_last_job = False
         self.WORKLOAD_FILE = WORKLOAD_FILE
-
-    #Simulation class
-    def get_machine_id_from_worker_id(self, worker_id):
-        return worker_id / CORES_PER_MACHINE
 
     #Simulation class
     def find_machines_random(self, probe_ratio, nr_tasks, possible_machine_indices, cores_requested):
@@ -842,6 +851,7 @@ class Simulation(object):
         del self.machines[:]
         del self.scheduler_indices[:]
         total_busyness = 0.0
+        num_workers = len(self.workers)
         for worker in self.workers:
             total_busyness += worker.busy_time
         del self.workers[:]
@@ -850,9 +860,9 @@ class Simulation(object):
 
         # Calculate utilizations of worker machines in DC
         time_elapsed_in_dc = current_time - first_time
-        print "Total time elapsed in the DC is", time_elapsed_in_dc, "s" 
-        utilization = 100 * (float(total_busyness) / float(time_elapsed_in_dc * TOTAL_MACHINES*CORES_PER_MACHINE))
-        print "Average utilization in ", SYSTEM_SIMULATED, " with ", TOTAL_MACHINES,"machines and ",CORES_PER_MACHINE, " cores/machine ", POLICY,    " hole fitting policy and", sys.argv[7],"system is ", utilization
+        print "Total time elapsed in the DC is", time_elapsed_in_dc, "s"
+        utilization = 100 * (float(total_busyness) / float(time_elapsed_in_dc * num_workers))
+        print "Average utilization in", SYSTEM_SIMULATED, "with", TOTAL_MACHINES,"machines and",num_workers, "total workers", POLICY, "hole fitting policy and", sys.argv[7],"system is", utilization
 
 #####################################################################################################################
 #globals
@@ -860,8 +870,8 @@ NETWORK_DELAY = 0.0005
 job_count = 1
 
 random.seed(123456798)
-if(len(sys.argv) != 8):
-    print "Incorrect number of parameters. Got", sys.argv
+if(len(sys.argv) != 9):
+    print "Incorrect number of parameters."
     sys.exit(1)
 
 utilization = 0
@@ -874,6 +884,8 @@ TOTAL_MACHINES                  = int(sys.argv[4])
 SYSTEM_SIMULATED                = sys.argv[5]
 POLICY                          = sys.argv[6]                      #RANDOM, LEAST_LEFTOVER, MOST_LEFTOVER
 DECENTRALIZED                   = (sys.argv[7] == "DECENTRALIZED") #CENTRALIZED, DECENTRALIZED
+CORE_DISTRIBUTION               = sys.argv[8]                      #STATIC, GAUSSIAN ON CORES_PER_MACHINE
+CORE_DISTRIBUTION_DEVIATION     = 2                                #if CORE_DISTRIBUTION == "GAUSSIAN"
 
 PROTOCOL_DELAY = 0
 # Leaf - Tor - Spine - Tor - Leaf
@@ -888,14 +900,15 @@ log_file = (separator.join(file_name))
 finished_file   = open(log_file, 'w')
 
 t1 = time.time()
-keeper = ClusterStatusKeeper(TOTAL_MACHINES * CORES_PER_MACHINE)
 simulation = Simulation(WORKLOAD_FILE, TOTAL_MACHINES)
+num_workers = len(simulation.workers)
+keeper = ClusterStatusKeeper(num_workers)
 simulation.run()
 
 simulation_time = (time.time() - t1)
 print "Simulation ended in ", simulation_time, " s "
 print "Placement total time ", placement_total_time
-print >> finished_file, "Average utilization in ", SYSTEM_SIMULATED, " with ", TOTAL_MACHINES,"machines and ",CORES_PER_MACHINE, " cores/machine ", POLICY, " hole fitting policy and", sys.argv[7],"system is ", utilization, "(simulation time :" , simulation_time, ")"
+print >> finished_file, "Average utilization in", SYSTEM_SIMULATED, "with", TOTAL_MACHINES,"machines and",num_workers, "total workers", POLICY, "hole fitting policy and", sys.argv[7],"system is", utilization, "(simulation time:", simulation_time,")"
 
 finished_file.close()
 # Generate CDF data
