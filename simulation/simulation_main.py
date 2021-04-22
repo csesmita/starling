@@ -201,7 +201,7 @@ class ClusterStatusKeeper(object):
     # Returns - ([est_task1, est_task2, ...],[[list of cores],[list of core], [],...])
     # Might return smaller values for smaller cpu req, even if those requests come in later.
     # Also, converts holes to ints except the last entry in end which is float('inf')
-    def get_machine_est_wait(self, cores, cpu_req, arrival_time, task_duration, delay):
+    def get_machine_est_wait(self, cores, cpu_req, arrival_time, task_duration, delay, best_current_time):
         num_cores = len(cores)
         if num_cores < cpu_req:
             return (float('inf'), [])
@@ -229,6 +229,9 @@ class ClusterStatusKeeper(object):
                     print "Error in get_machine_est_wait - start of hole is equal or larger than end of hole"
                     print "Core index", core_id, "hole id ", hole, "start is ", time_start[hole], "end is ", time_end[hole]
                     raise AssertionError('Error in get_machine_est_wait - start of hole is equal or larger than end of hole')
+                #Be done if time exceeds the present best fit
+                if time_start[hole] > best_current_time:
+                    break
                 # Skip holes before arrival time
                 if time_end[hole] < arrival_time:
                     continue
@@ -279,6 +282,7 @@ class ClusterStatusKeeper(object):
                 # cpu_req is available when the fastest cpu_req number of cores is
                 # available for use at or after arrival_time.
                 return (start_time, cores_list)
+        return (float('inf'), [])
 
 
     #This function is needed in the first place to ensure best fit algorithm does not make a false placement
@@ -379,7 +383,7 @@ class ClusterStatusKeeper(object):
                     task_duration = best_fit_end - best_fit_start
                     cpu_req = len(worker_indices)
                     machine_id = simulation.get_machine_id_from_worker_id(worker_index)
-                    est_time, core_list = keeper.get_machine_est_wait(simulation.machines[machine_id].cores, cpu_req, current_time, task_duration, False)
+                    est_time, core_list = keeper.get_machine_est_wait(simulation.machines[machine_id].cores, cpu_req, current_time, task_duration, False, float('inf'))
                     keeper.update_worker_queues_free_time(core_list, est_time, est_time + task_duration, current_time, False)
 
                 if len(self.worker_queues_free_time_start[worker_index]) != len(self.worker_queues_free_time_end[worker_index]):
@@ -698,11 +702,14 @@ class Simulation(object):
             chosen_machine = None
             cpu_req = job.cpu_reqs_by_tasks[task_index]
             for machine_id in xrange(TOTAL_MACHINES):
-                est_time, core_list = keeper.get_machine_est_wait(self.machines[machine_id].cores, cpu_req, current_time, job.actual_task_duration[task_index], delay)
+                est_time, core_list = keeper.get_machine_est_wait(self.machines[machine_id].cores, cpu_req, current_time, job.actual_task_duration[task_index], delay, best_fit_time)
                 cores_lists_for_reqs_to_machine_matrix[machine_id] = core_list
                 if est_time < best_fit_time:
                     best_fit_time = est_time
                     chosen_machine = machine_id
+                if best_fit_time == int(math.ceil(current_time)):
+                    #Can't do any better
+                    break
             if best_fit_time == float('inf') or chosen_machine == None:
                 raise AssertionError('Error - Got best fit time that is infinite!')
             cores_at_chosen_machine = cores_lists_for_reqs_to_machine_matrix[chosen_machine]
