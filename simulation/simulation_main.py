@@ -248,6 +248,7 @@ class ClusterStatusKeeper(object):
                 if time_end[hole] != float('inf'):
                     # Find all possible holes at every granularity, each lasting task_duration time.
                     end = time_end[hole] - task_duration + 1
+                    end = min(end, best_current_time)
                     #time granularity of 1.
                     arr = xrange(start, end, 1)
                     for start_chunk in arr:
