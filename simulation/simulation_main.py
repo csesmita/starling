@@ -912,4 +912,4 @@ print >> finished_file, "Average utilization in", SYSTEM_SIMULATED, "with", TOTA
 
 finished_file.close()
 # Generate CDF data
-import os; os.system("pypy process.py " + log_file + " " + SYSTEM_SIMULATED + " " + WORKLOAD_FILE + " " + str(TOTAL_MACHINES)); os.remove(log_file)
+import os; os.system("python process.py " + log_file + " " + SYSTEM_SIMULATED + " " + WORKLOAD_FILE + " " + str(TOTAL_MACHINES)); os.remove(log_file)
