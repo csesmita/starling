@@ -700,7 +700,6 @@ class Simulation(object):
         if job.num_tasks != len(job.cpu_reqs_by_tasks):
             raise AssertionError('Number of tasks provided not equal to length of cpu_reqs_by_tasks list')
         global placement_total_time
-        cores_lists_for_reqs_to_machine_matrix = collections.defaultdict()
         # best_fit_for_tasks = (ma, mb, .... )
         best_fit_for_tasks = set()
         current_time += NETWORK_DELAY
@@ -710,19 +709,19 @@ class Simulation(object):
         for task_index in xrange(job.num_tasks):
             best_fit_time = float('inf')
             chosen_machine = None
+            cores_at_chosen_machine = None
             cpu_req = job.cpu_reqs_by_tasks[task_index]
             for machine_id in xrange(TOTAL_MACHINES):
                 est_time, core_list = keeper.get_machine_est_wait(self.machines[machine_id].cores, cpu_req, current_time, job.actual_task_duration[task_index], delay, best_fit_time)
-                cores_lists_for_reqs_to_machine_matrix[machine_id] = core_list
                 if est_time < best_fit_time:
                     best_fit_time = est_time
                     chosen_machine = machine_id
+                    cores_at_chosen_machine = core_list
                 if best_fit_time == int(math.ceil(current_time)):
                     #Can't do any better
                     break
-            if best_fit_time == float('inf') or chosen_machine == None:
+            if best_fit_time == float('inf') or chosen_machine == None or cores_at_chosen_machine == None:
                 raise AssertionError('Error - Got best fit time that is infinite!')
-            cores_at_chosen_machine = cores_lists_for_reqs_to_machine_matrix[chosen_machine]
             if len(cores_at_chosen_machine) != cpu_req:
                 raise AssertionError("Not enough machines that pass filter requirement of job")
             #print"Choosing machine", chosen_machine,":[",cores_at_chosen_machine,"] with best fit time ",best_fit_time,"for task #", task_index, " task_duration", job.actual_task_duration[task_index]," arrival time ", current_time, "requesting", cpu_req, "cores"
@@ -732,7 +731,6 @@ class Simulation(object):
             probe_params = [cores_at_chosen_machine, job.id, task_index, current_time]
             self.machines[chosen_machine].add_machine_probe(best_fit_time, probe_params)
             keeper.update_worker_queues_free_time(cores_at_chosen_machine, best_fit_time, best_fit_time + int(math.ceil(job.actual_task_duration[task_index])), current_time, delay)
-        cores_lists_for_reqs_to_machine_matrix.clear()
         placement_total_time += time.time() - placement_start_time
         return best_fit_for_tasks
 
@@ -909,7 +907,7 @@ simulation.run()
 simulation_time = (time.time() - t1)
 print "Simulation ended in ", simulation_time, " s "
 print "Placement total time ", placement_total_time
-print >> finished_file, "Average utilization in", SYSTEM_SIMULATED, "with", TOTAL_MACHINES,"machines and",num_workers, "total workers", POLICY, "hole fitting policy and", sys.argv[7],"system is", utilization, "(simulation time:", simulation_time,")"
+print >> finished_file, "Average utilization in", SYSTEM_SIMULATED, "with", TOTAL_MACHINES,"machines and",num_workers, "total workers", POLICY, "hole fitting policy and", sys.argv[7],"system is", utilization, "(simulation time:", simulation_time," total DC time:",time_elapsed_in_dc, ")"
 
 finished_file.close()
 # Generate CDF data
