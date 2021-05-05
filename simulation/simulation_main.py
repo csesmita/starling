@@ -826,6 +826,7 @@ class Simulation(object):
     #Simulation class
     def run(self):
         global utilization
+        global time_elapsed_in_dc 
         last_time = 0
 
         self.jobs_file = open(self.WORKLOAD_FILE, 'r')
