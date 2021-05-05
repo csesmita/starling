@@ -875,6 +875,7 @@ if(len(sys.argv) != 9):
 
 utilization = 0
 placement_total_time = 0
+time_elapsed_in_dc = 0
 
 WORKLOAD_FILE                   = sys.argv[1]
 CORES_PER_MACHINE               = int(sys.argv[2])
