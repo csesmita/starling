@@ -1,9 +1,7 @@
 #
 # MURMURATION
 #
-# Copyright 2020 - Systems Research Lab, CS Department, University of Cambridge 
-#
-# Modified from EAGLE - Operating Systems Laboratory EPFL
+# Copyright 2021 - Systems Research Lab, CS Department, University of Cambridge
 
 import sys
 import time
@@ -228,12 +226,15 @@ class ClusterStatusKeeper(object):
         all_slots_list_cores = collections.defaultdict(set)
         all_slots_fragmentation = collections.defaultdict(dict)
         inf_hole_start = {}
+        max_time_start = float('inf')
         for core in cores:
             core_id = core.id
             time_start, time_end = self.adjust_propagation_delay(core_id, arrival_time, delay)
             if len(time_end) != len(time_start):
                 raise AssertionError('Error in get_machine_est_wait - mismatch in lengths of start and end hole arrays')
             for hole in xrange(len(time_end)):
+                if time_start[hole] > max_time_start:
+                    break
                 if time_start[hole] >= time_end[hole]:
                     print "Error in get_machine_est_wait - start of hole is equal or larger than end of hole"
                     print "Core index", core_id, "hole id ", hole, "start is ", time_start[hole], "end is ", time_end[hole]
@@ -256,11 +257,15 @@ class ClusterStatusKeeper(object):
                         all_slots_list_add(start_chunk)
                         all_slots_list_cores[start_chunk].add(core_id)
                         all_slots_fragmentation[start_chunk][core_id] = max(start_chunk - time_start[hole],time_end[hole] - start_chunk - task_duration)
+                        if max_time_start > start_chunk and len(all_slots_list_cores[start_chunk]) >= cpu_req:
+                            max_time_start = start_chunk
                 else:
                     all_slots_list_add(start)
                     all_slots_list_cores[start].add(core_id)
                     all_slots_fragmentation[start][core_id] = start - time_start[hole]
                     inf_hole_start[core_id] = start
+                    if max_time_start > start and len(all_slots_list_cores[start]) >= cpu_req:
+                        max_time_start = start
 
         for core, inf_start in inf_hole_start.items():
             for start in all_slots_list_cores.keys():
