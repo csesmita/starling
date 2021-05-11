@@ -256,13 +256,13 @@ class ClusterStatusKeeper(object):
                         #print "[t=",arrival_time,"] For core ", core_id," fitting task of duration", task_duration,"into hole = ", time_start[hole], time_end[hole], "starting at", start_chunk
                         all_slots_list_add(start_chunk)
                         all_slots_list_cores[start_chunk].add(core_id)
-                        all_slots_fragmentation[start_chunk][core_id] = max(start_chunk - time_start[hole],time_end[hole] - start_chunk - task_duration)
+                        all_slots_fragmentation[start_chunk][core_id] = max(start_chunk - start, time_end[hole] - start_chunk - task_duration)
                         if max_time_start > start_chunk and len(all_slots_list_cores[start_chunk]) >= cpu_req:
                             max_time_start = start_chunk
                 else:
                     all_slots_list_add(start)
                     all_slots_list_cores[start].add(core_id)
-                    all_slots_fragmentation[start][core_id] = start - time_start[hole]
+                    all_slots_fragmentation[start][core_id] = 0
                     inf_hole_start[core_id] = start
                     if max_time_start > start and len(all_slots_list_cores[start]) >= cpu_req:
                         max_time_start = start
@@ -284,14 +284,14 @@ class ClusterStatusKeeper(object):
                     cores_list = random.sample(all_slots_list_cores[start_time], cpu_req)
                 else:
                     cores_fragmented = all_slots_fragmentation[start_time]
-                    if POLICY == "MOST_LEFTOVER":
+                    if POLICY == "WORST_FIT":
                         #Select cores with largest available hole after allocation
                         sorted_cores_fragmented = sorted(cores_fragmented.items(), key=operator.itemgetter(1), reverse=True)[0:cpu_req]
-                    elif POLICY == "LEAST_LEFTOVER":
+                    elif POLICY == "BEST_FIT":
                         #Select cores with smallest available hole after allocation
                         sorted_cores_fragmented = sorted(cores_fragmented.items(), key=operator.itemgetter(1), reverse=False)[0:cpu_req]
                     else:
-                        raise AssertionError('Check the name of the policy. Should be RANDOM, MOST_LEFTOVER OR LEAST_LEFTOVER')
+                        raise AssertionError('Check the name of the policy. Should be RANDOM, WORST_FIT OR BEST_FIT')
                     cores_list = set(dict(sorted_cores_fragmented).keys())
                 #print "Earliest start time for task duration", task_duration,"needing", cpu_req,"cores is ", start_time, "with cores", cores_list 
                 # cpu_req is available when the fastest cpu_req number of cores is
@@ -704,12 +704,10 @@ class Simulation(object):
     def find_workers_murmuration(self, job, current_time):
         if job.num_tasks != len(job.cpu_reqs_by_tasks):
             raise AssertionError('Number of tasks provided not equal to length of cpu_reqs_by_tasks list')
-        global placement_total_time
         # best_fit_for_tasks = (ma, mb, .... )
         best_fit_for_tasks = set()
         current_time += NETWORK_DELAY
         machines = self.machines
-        placement_start_time = time.time()
         delay = True if DECENTRALIZED else False
         for task_index in xrange(job.num_tasks):
             best_fit_time = float('inf')
@@ -736,7 +734,6 @@ class Simulation(object):
             probe_params = [cores_at_chosen_machine, job.id, task_index, current_time]
             self.machines[chosen_machine].add_machine_probe(best_fit_time, probe_params)
             keeper.update_worker_queues_free_time(cores_at_chosen_machine, best_fit_time, best_fit_time + int(math.ceil(job.actual_task_duration[task_index])), current_time, delay)
-        placement_total_time += time.time() - placement_start_time
         return best_fit_for_tasks
 
     #Simulation class
@@ -832,6 +829,7 @@ class Simulation(object):
     def run(self):
         global utilization
         global time_elapsed_in_dc 
+        global total_busyness
         last_time = 0
 
         self.jobs_file = open(self.WORKLOAD_FILE, 'r')
@@ -855,7 +853,6 @@ class Simulation(object):
         #Free up all memory
         del self.machines[:]
         del self.scheduler_indices[:]
-        total_busyness = 0.0
         num_workers = len(self.workers)
         for worker in self.workers:
             total_busyness += worker.busy_time
@@ -867,7 +864,6 @@ class Simulation(object):
         time_elapsed_in_dc = current_time - first_time
         print "Total time elapsed in the DC is", time_elapsed_in_dc, "s"
         utilization = 100 * (float(total_busyness) / float(time_elapsed_in_dc * num_workers))
-        print "Average utilization in", SYSTEM_SIMULATED, "with", TOTAL_MACHINES,"machines and",num_workers, "total workers", POLICY, "hole fitting policy and", sys.argv[7],"system is", utilization
 
 #####################################################################################################################
 #globals
@@ -880,15 +876,15 @@ if(len(sys.argv) != 9):
     sys.exit(1)
 
 utilization = 0
-placement_total_time = 0
 time_elapsed_in_dc = 0
+total_busyness = 0.0
 
 WORKLOAD_FILE                   = sys.argv[1]
 CORES_PER_MACHINE               = int(sys.argv[2])
 PROBE_RATIO                     = int(sys.argv[3])
 TOTAL_MACHINES                  = int(sys.argv[4])
 SYSTEM_SIMULATED                = sys.argv[5]
-POLICY                          = sys.argv[6]                      #RANDOM, LEAST_LEFTOVER, MOST_LEFTOVER
+POLICY                          = sys.argv[6]                      #RANDOM, BEST_FIT, WORST_FIT
 DECENTRALIZED                   = (sys.argv[7] == "DECENTRALIZED") #CENTRALIZED, DECENTRALIZED
 CORE_DISTRIBUTION               = sys.argv[8]                      #STATIC, GAUSSIAN ON CORES_PER_MACHINE
 CORE_DISTRIBUTION_DEVIATION     = 2                                #if CORE_DISTRIBUTION == "GAUSSIAN"
@@ -913,8 +909,8 @@ simulation.run()
 
 simulation_time = (time.time() - t1)
 print "Simulation ended in ", simulation_time, " s "
-print "Placement total time ", placement_total_time
-print >> finished_file, "Average utilization in", SYSTEM_SIMULATED, "with", TOTAL_MACHINES,"machines and",num_workers, "total workers", POLICY, "hole fitting policy and", sys.argv[7],"system is", utilization, "(simulation time:", simulation_time," total DC time:",time_elapsed_in_dc, ")"
+print "Average utilization in", SYSTEM_SIMULATED, "with", TOTAL_MACHINES,"machines and",num_workers, "total workers", POLICY, "hole fitting policy and", sys.argv[7],"system is", utilization, "(simulation time:", simulation_time," total DC time:",time_elapsed_in_dc, ")", "total busyness", total_busyness
+print >> finished_file, "Average utilization in", SYSTEM_SIMULATED, "with", TOTAL_MACHINES,"machines and",num_workers, "total workers", POLICY, "hole fitting policy and", sys.argv[7],"system is", utilization, "(simulation time:", simulation_time," total DC time:",time_elapsed_in_dc, ")", "total busyness", total_busyness
 
 finished_file.close()
 # Generate CDF data
