@@ -159,6 +159,8 @@ class ClusterStatusKeeper(object):
            self.worker_queues_free_time_start[i] = [0]
            self.worker_queues_free_time_end[i] = [float('inf')]
            #History will be {insertion_time: [start_task_time, end_task_time]} format
+           #Positive task times indicate holes to be put back in.
+           #Negative task times indicate holes to be removed.
            self.worker_queues_history[i] = collections.defaultdict(list)
 
     def adjust_propagation_delay(self, core_id, current_time, delay):
@@ -172,34 +174,70 @@ class ClusterStatusKeeper(object):
         for history_time, history_hole in self.worker_queues_history[core_id].items():
             if history_time < time_limit:
                 continue
-            history_start_hole = history_hole[0]
-            history_end_hole = history_hole[1]
             for hole_index in xrange(len(time_start)):
-                if time_end[hole_index] < history_start_hole:
+                if time_end[hole_index] < math.abs(history_hole[0]):
                     continue
-                if time_start[hole_index] <= history_start_hole and history_start_hole < time_end[hole_index]:
-                    print "Core", core_id,": History hole", history_start_hole, history_end_hole, "current hole", time_start[hole_index], time_end[hole_index]
-                    raise AssertionError('History holes are currently not occupied!')
-                #Here, time_start > history_start_hole or time_end == history_start_hole
-                if not copied:
-                    time_start = copy.deepcopy(self.worker_queues_free_time_start[core_id])
-                    time_end = copy.deepcopy(self.worker_queues_free_time_end[core_id])
-                    copied = True
-                if time_start[hole_index] > history_start_hole:
-                    if time_start[hole_index] == history_end_hole:
-                        time_start.pop(hole_index)
-                        time_start.insert(hole_index, history_start_hole)
-                    else:
-                        time_start.insert(hole_index, history_start_hole)
+                if history_hole[0] >= 0 and history_hole[1] >= 0:
+                    history_start_hole = history_hole[0]
+                    history_end_hole = history_hole[1]
+                    #New tasks assigned reflect as positive holes.
+                    #History hole cannot start in a currently existing hole,
+                    #else it would've been captured in history.
+                    if time_start[hole_index] <= history_start_hole and history_start_hole < time_end[hole_index]:
+                        print "Free - Core", core_id,": History hole", history_start_hole, history_end_hole, "current hole", time_start[hole_index], time_end[hole_index]
+                        raise AssertionError('History holes are currently not occupied!')
+                    if not copied:
+                        time_start = copy.deepcopy(self.worker_queues_free_time_start[core_id])
+                        time_end = copy.deepcopy(self.worker_queues_free_time_end[core_id])
+                        copied = True
+                    #Here, time_start > history_start_hole or time_end == history_start_hole
+                    if time_start[hole_index] > history_start_hole:
+                        if time_start[hole_index] == history_end_hole:
+                            time_start.pop(hole_index)
+                            time_start.insert(hole_index, history_start_hole)
+                        else:
+                            time_start.insert(hole_index, history_start_hole)
+                            time_end.insert(hole_index, history_end_hole)
+                    if time_end[hole_index] == history_start_hole:
+                        time_end.pop(hole_index)
                         time_end.insert(hole_index, history_end_hole)
-                if time_end[hole_index] == history_start_hole:
-                    time_end.pop(hole_index)
-                    time_end.insert(hole_index, history_end_hole)
-                #Collapse holes if need be
-                if (hole_index < len(time_end) - 1) and time_end[hole_index] == time_start[hole_index + 1]:
-                    time_end.pop(hole_index)
-                    time_start.pop(hole_index + 1)
-                break
+                    #Collapse holes if need be
+                    if (hole_index < len(time_end) - 1) and time_end[hole_index] == time_start[hole_index + 1]:
+                        time_end.pop(hole_index)
+                        time_start.pop(hole_index + 1)
+                    break
+                else:
+                    #Tasks leaving workers reflect as negative holes.
+                    #History occupancy cannot start in a currently existing occupancy,
+                    #else it would've been captured in history
+                    history_start_occupancy = math.abs(history_hole[0])
+                    history_end_occupancy = math.abs(history_hole[1])
+                    if history_start_occupancy < time_start[hole_index] or history_start_occupancy == time_end[hole_index]:
+                        print "Occupancy - Core", core_id,": History hole", history_start_hole, history_end_hole, "current hole", time_start[hole_index], time_end[hole_index]
+                        raise AssertionError('History holes are currently occupied!')
+                    if not copied:
+                        time_start = copy.deepcopy(self.worker_queues_free_time_start[core_id])
+                        time_end = copy.deepcopy(self.worker_queues_free_time_end[core_id])
+                        copied = True
+                    #Here, time_start < history_start_occupancy or time_start == history_start_occupancy
+                    if time_start[hole_index] == history_start_occupancy:
+                        time_start.pop(hole_index)
+                        if not time_end[hole_index] == history_end_occupancy:
+                            time_start.insert(hole_index, history_end_occupancy)
+                        else:
+                            time_end.pop(hole_index)
+                    if time_start[hole_index] < history_start_occupancy:
+                        if time_end[hole_index] == history_end_occupancy:
+                            time_end.pop(hole_index)
+                            time_end.insert(hole_index, history_start_occupancy)
+                        else:
+                            time_end.insert(hole_index, history_start_occupancy)
+                            time_start.insert(hole_index + 1, history_end_occupancy)
+                    #Collapse holes if need be
+                    if (hole_index < len(time_end) - 1) and time_end[hole_index] == time_start[hole_index + 1]:
+                        time_end.pop(hole_index)
+                        time_start.pop(hole_index + 1)
+                    break
         return time_start, time_end
 
     # ClusterStatusKeeper class
@@ -327,6 +365,12 @@ class ClusterStatusKeeper(object):
                         self.worker_queues_free_time_end[worker_index].pop(next_index)
                     break
 
+    def update_history_holes(self, worker_index, current_time, best_fit_start, best_fit_end, task_is_leaving):
+        if task_is_leaving:
+            best_fit_start = -1 * best_fit_start
+            best_fit_end   = -1 * best_fit_end
+        self.worker_queues_history[worker_index][current_time] = [best_fit_start, best_fit_end]
+
     #Remove outdated holes
     def update_worker_queues_free_time(self, worker_indices, best_fit_start, best_fit_end, current_time, delay):
         if best_fit_start >= best_fit_end:
@@ -387,8 +431,7 @@ class ClusterStatusKeeper(object):
                             self.worker_queues_free_time_start[worker_index].insert(insert_position, best_fit_end)
                             self.worker_queues_free_time_end[worker_index].insert(insert_position, end_hole)
                         #print "Updated holes at worker", worker_index," is ", self.worker_queues_free_time_start[worker_index], self.worker_queues_free_time_end[worker_index]
-                        self.worker_queues_history[worker_index][current_time] = [best_fit_start , best_fit_end]
-
+                        self.update_history_holes(worker_index, current_time, best_fit_start, best_fit_end, False)
                         break
 
                 if found_hole == False and not delay:
@@ -418,6 +461,7 @@ class TaskEndEventForMachines(object):
     def run(self, current_time):
         worker = simulation.workers[self.worker_index]
         worker.busy_time += self.task_duration
+        keeper.update_history_holes(self.worker_index, current_time, current_time - self.task_duration, current_time, True)
 
         return worker.free_slot(current_time)
 
