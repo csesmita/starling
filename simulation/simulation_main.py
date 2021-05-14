@@ -459,10 +459,19 @@ class TaskEndEventForMachines(object):
         self.task_duration = task_duration
 
     def run(self, current_time):
+        global start_time_in_dc
         worker = simulation.workers[self.worker_index]
         worker.busy_time += self.task_duration
         keeper.update_history_holes(self.worker_index, current_time, current_time - self.task_duration, current_time, True)
 
+        total_busyness = 0.0
+        num_workers = len(simulation.workers)
+        for temp_worker in simulation.workers:
+            total_busyness += temp_worker.busy_time
+        # Calculate utilizations of worker machines in DC
+        time_elapsed_in_dc = current_time - start_time_in_dc 
+        utilization = 100 * (float(total_busyness) / float(time_elapsed_in_dc * num_workers))
+        print "Average utilization with ",num_workers, "total workers is", utilization, "(total DC time:",time_elapsed_in_dc, ")", "total busyness", total_busyness
         return worker.free_slot(current_time)
 
 
@@ -511,7 +520,6 @@ class Machine(object):
         if SYSTEM_SIMULATED == "Sparrow":
             return self.try_process_next_random_probe_single(current_time)
         events = []
-
         #Candidates list among all possible tasks that can execute with current free cores.
         earliest_task_completion_time = float('inf')
         candidate_best_fit_time = 0.0
@@ -526,7 +534,6 @@ class Machine(object):
 
             #First of the queued tasks in this iteration
             best_fit_time, task_info = self.queued_probes.get()
-
             # Extract all information
             core_indices = task_info[0]
             job_id = task_info[1]
@@ -535,7 +542,6 @@ class Machine(object):
                 raise AssertionError('No redundant probes in Murmuration, yet tasks have finished?')
             task_index = task_info[2]
             probe_arrival_time = task_info[3]
-
             if(not all(x in self.free_cores.keys() for x in core_indices)):
                 #Wait for the next event to trigger this task processing
                 candidate_probes_covered.put((best_fit_time, task_info))
@@ -574,25 +580,31 @@ class Machine(object):
 
         current_time = int(math.ceil(current_time))
         core_indices = []
-        if earliest_task_completion_time != float('inf'):
-            # Extract all information
-            core_indices = candidate_task_info[0]
-            job_id = candidate_task_info[1]
-            job = simulation.jobs[job_id]
-            if len(job.unscheduled_tasks) <= 0:
-                raise AssertionError('No redundant probes in Murmuration, yet tasks have finished?')
-            task_index = candidate_task_info[2]
-            probe_arrival_time = candidate_task_info[3]
+        if earliest_task_completion_time == float('inf'):
+            #Reinsert all free cores other than the ones needed
+            for core_index in candidate_cores_covered.keys():
+                if core_index not in core_indices:
+                    self.free_cores[core_index] = candidate_cores_covered[core_index]
 
-            task_actual_duration = job.actual_task_duration[task_index]
-            if candidate_best_fit_time < current_time:
-                #This can happen due to precision of best fit time being in integers, but not so of task durations.
-                keeper.shift_holes(core_indices, candidate_best_fit_time, int(math.ceil(task_actual_duration)), current_time)
+            #Reinsert all queued probes that were inspected
+            while not candidate_probes_covered.empty():
+                best_fit_time, task_info = candidate_probes_covered.get()
+                self.queued_probes.put((best_fit_time, task_info))
+            return []
 
-            # Finally, process the current task with all these parameters
-            task_status, new_events = simulation.get_machine_task(self, core_indices, job_id, task_index, task_actual_duration, candidate_processing_time, probe_arrival_time)
-            for new_event in new_events:
-                events.append((new_event[0], new_event[1]))
+        # Extract all information
+        core_indices = candidate_task_info[0]
+        job_id = candidate_task_info[1]
+        job = simulation.jobs[job_id]
+        if len(job.unscheduled_tasks) <= 0:
+            raise AssertionError('No redundant probes in Murmuration, yet tasks have finished?')
+        task_index = candidate_task_info[2]
+        probe_arrival_time = candidate_task_info[3]
+
+        task_actual_duration = job.actual_task_duration[task_index]
+        if candidate_best_fit_time < current_time:
+            #This can happen due to precision of best fit time being in integers, but not so of task durations.
+            keeper.shift_holes(core_indices, candidate_best_fit_time, int(math.ceil(task_actual_duration)), current_time)
 
         #Reinsert all free cores other than the ones needed
         for core_index in candidate_cores_covered.keys():
@@ -603,6 +615,11 @@ class Machine(object):
         while not candidate_probes_covered.empty():
             best_fit_time, task_info = candidate_probes_covered.get()
             self.queued_probes.put((best_fit_time, task_info))
+
+        # Finally, process the current task with all these parameters
+        task_status, new_events = simulation.get_machine_task(self, core_indices, job_id, task_index, task_actual_duration, candidate_processing_time, probe_arrival_time)
+        for new_event in new_events:
+            events.append((new_event[0], new_event[1]))
 
         return events
 
@@ -725,8 +742,8 @@ class Simulation(object):
         assert len(cores_requested) == nr_tasks
         chosen_machine_indices = []
         nr_probes = (probe_ratio*nr_tasks)
-        #print "Number of machines for Sparrow job", len(possible_machine_indices), "and num tasks", nr_tasks, "probe ratio", probe_ratio
         task_index = 0
+        #print "Number of machines for Sparrow job", len(possible_machine_indices), "and num tasks", nr_tasks, "probe ratio", probe_ratio, "chose ", chosen_machine_indices
         for task_index in range(0, nr_tasks):
             nr_cores_requested = cores_requested[task_index]
             probe_index = 0
@@ -834,7 +851,6 @@ class Simulation(object):
     #Simulation class
     def get_machine_task(self, machine, core_indices, job_id, task_index, task_duration, current_time, probe_arrival_time):
         job = self.jobs[job_id]
-
         task_wait_time = current_time - probe_arrival_time
         scheduler_algorithm_time = probe_arrival_time - job.start_time
 
@@ -860,7 +876,6 @@ class Simulation(object):
 
         for core_index in core_indices:
             events.append((task_completion_time, TaskEndEventForMachines(core_index, task_duration)))
-
         if is_job_complete:
             del job.unscheduled_tasks
             del job.actual_task_duration
@@ -874,11 +889,12 @@ class Simulation(object):
         global utilization
         global time_elapsed_in_dc 
         global total_busyness
+        global start_time_in_dc
         last_time = 0
 
         self.jobs_file = open(self.WORKLOAD_FILE, 'r')
         line = self.jobs_file.readline()
-        first_time = float(line.split()[0])
+        start_time_in_dc = float(line.split()[0])
 
         new_job = Job(line)
         self.event_queue.put((float(line.split()[0]), JobArrival(new_job, self.jobs_file)))
@@ -905,7 +921,7 @@ class Simulation(object):
         self.jobs_file.close()
 
         # Calculate utilizations of worker machines in DC
-        time_elapsed_in_dc = current_time - first_time
+        time_elapsed_in_dc = current_time - start_time_in_dc
         print "Total time elapsed in the DC is", time_elapsed_in_dc, "s"
         utilization = 100 * (float(total_busyness) / float(time_elapsed_in_dc * num_workers))
 
@@ -919,9 +935,10 @@ if(len(sys.argv) != 9):
     print "Incorrect number of parameters."
     sys.exit(1)
 
-utilization = 0
-time_elapsed_in_dc = 0
+utilization = 0.0
+time_elapsed_in_dc = 0.0
 total_busyness = 0.0
+start_time_in_dc = 0.0
 
 WORKLOAD_FILE                   = sys.argv[1]
 CORES_PER_MACHINE               = int(sys.argv[2])
