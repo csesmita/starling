@@ -464,14 +464,6 @@ class TaskEndEventForMachines(object):
         worker.busy_time += self.task_duration
         keeper.update_history_holes(self.worker_index, current_time, current_time - self.task_duration, current_time, True)
 
-        total_busyness = 0.0
-        num_workers = len(simulation.workers)
-        for temp_worker in simulation.workers:
-            total_busyness += temp_worker.busy_time
-        # Calculate utilizations of worker machines in DC
-        time_elapsed_in_dc = current_time - start_time_in_dc 
-        utilization = 100 * (float(total_busyness) / float(time_elapsed_in_dc * num_workers))
-        print "Average utilization with ",num_workers, "total workers is", utilization, "(total DC time:",time_elapsed_in_dc, ")", "total busyness", total_busyness
         return worker.free_slot(current_time)
 
 
