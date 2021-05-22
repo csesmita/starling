@@ -14,8 +14,6 @@ import copy
 
 from gc import collect
 
-RATIO_SCHEDULERS_TO_CORES = 0.8
-
 class Job(object):
     def __init__(self, line):
         global job_count
@@ -898,11 +896,10 @@ class Simulation(object):
 #####################################################################################################################
 #globals
 #0.5ms delay on each link.
-NETWORK_DELAY = 0.5
 job_count = 1
 
 random.seed(123456798)
-if(len(sys.argv) != 9):
+if(len(sys.argv) != 11):
     print "Incorrect number of parameters."
     sys.exit(1)
 
@@ -920,6 +917,12 @@ POLICY                          = sys.argv[6]                      #RANDOM, BEST
 DECENTRALIZED                   = (sys.argv[7] == "DECENTRALIZED") #CENTRALIZED, DECENTRALIZED
 CORE_DISTRIBUTION               = sys.argv[8]                      #STATIC, GAUSSIAN ON CORES_PER_MACHINE
 CORE_DISTRIBUTION_DEVIATION     = 2                                #if CORE_DISTRIBUTION == "GAUSSIAN"
+RATIO_SCHEDULERS_TO_CORES       = float(sys.argv[9])
+NETWORK_DELAY                   = float(sys.argv[10])
+
+if RATIO_SCHEDULERS_TO_CORES > 1:
+    print "Scheduler to Cores ratio cannot exceed 1"
+    sys.exit(1)
 
 PROTOCOL_DELAY = 0
 # Leaf - Tor - Spine - Tor - Leaf
