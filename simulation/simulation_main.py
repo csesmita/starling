@@ -139,7 +139,7 @@ class ProbeEventForMachines(Event):
         self.machine = machine
 
     def run(self, current_time):
-        return self.machine.try_process_next_probe_in_the_queue(current_time)
+        return self.machine.try_process_next_probe_murmuration(current_time)
 
 #####################################################################################################################
 #####################################################################################################################
@@ -245,6 +245,7 @@ class ClusterStatusKeeper(object):
         for core in cores:
             core_id = core.id
             time_start, time_end = self.adjust_propagation_delay(core_id, arrival_time, delay, scheduler_index)
+            #print "For core", core_id,"got holes - ", time_start, time_end
             if len(time_end) != len(time_start):
                 raise AssertionError('Error in get_machine_est_wait - mismatch in lengths of start and end hole arrays')
             for hole in xrange(len(time_end)):
@@ -290,6 +291,7 @@ class ClusterStatusKeeper(object):
                     all_slots_fragmentation[start][core] = start - inf_start
 
         all_slots_list = sorted(all_slots_list)
+        #print "Available time slots are - ", all_slots_list
         for start_time in all_slots_list:
             cores_available = len(all_slots_list_cores[start_time])
             if cores_available == cpu_req:
@@ -314,7 +316,6 @@ class ClusterStatusKeeper(object):
                 # available for use at or after arrival_time.
                 return (start_time, cores_list)
         return (float('inf'), [])
-
 
     #This function is needed in the first place to ensure best fit algorithm does not make a false placement
     #for a hole which is non existent when cores are actually freed. This is because of difference in precision
@@ -344,6 +345,7 @@ class ClusterStatusKeeper(object):
                     #print "Shift hole for Core", worker_index, "is ",self.worker_queues_free_time_start[worker_index], self.worker_queues_free_time_end[worker_index]
                     # Accordingly change history hole
                     self.worker_queues_history[worker_index][current_best_time] = [current_best_time, current_best_time + task_duration, None]
+                    #print "Shift holes - Updated holes at Core", worker_index," is ", self.worker_queues_free_time_start[worker_index], self.worker_queues_free_time_end[worker_index]
                     break
 
     def update_history_holes(self, worker_index, current_time, best_fit_start, best_fit_end, task_is_leaving, scheduler_index):
@@ -412,7 +414,7 @@ class ClusterStatusKeeper(object):
                     cpu_req = len(worker_indices)
                     machine_id = simulation.workers[worker_index].machine_id
                     #print "Collision detected at worker", str(worker_index), "for best fit times ", best_fit_start, best_fit_end, " its holes being", self.worker_queues_free_time_start[worker_index], self.worker_queues_free_time_end[worker_index], "and history", self.worker_queues_history[worker_index],"at current time", current_time, "at machine", machine_id, "for num cores = ", cpu_req
-                    est_time, core_list = keeper.get_machine_est_wait(simulation.machines[machine_id].cores, cpu_req, current_time, task_duration, False, float('inf'), scheduler_index)
+                    est_time, core_list = keeper.get_machine_est_wait(simulation.machines[machine_id].cores, cpu_req, current_time, task_duration, False, float('inf'), None)
                     #This update happens at the worker, so none of the schedulers know about it.
                     keeper.update_worker_queues_free_time(core_list, est_time, est_time + task_duration, current_time, False, None)
 
@@ -431,11 +433,21 @@ class TaskEndEventForMachines(object):
         self.task_duration = task_duration
 
     def run(self, current_time):
+        global start_time_in_dc
         worker = simulation.workers[self.worker_index]
         worker.busy_time += self.task_duration
         # Task leaving is an event registered at the worker. None of the schedulers know about it, till the worker updates.
         keeper.update_history_holes(self.worker_index, current_time, int(math.ceil(current_time - self.task_duration)), int(math.ceil(current_time)), True, None)
         #keeper.update_history_holes(self.worker_index, current_time, (current_time - self.task_duration), (current_time), True, None)
+
+        total_busyness = 0.0
+        num_workers = len(simulation.workers)
+        for temp_worker in simulation.workers:
+            total_busyness += temp_worker.busy_time
+        # Calculate utilizations of worker machines in DC
+        time_elapsed_in_dc = current_time - start_time_in_dc
+        utilization = 100 * (float(total_busyness) / float(time_elapsed_in_dc * num_workers))
+        #print "Task duration", self.task_duration,"Average utilization with ",num_workers, "total workers is", utilization, "(total DC time:",time_elapsed_in_dc, ")", "total busyness", total_busyness
 
         return worker.free_slot(current_time)
 
@@ -473,7 +485,7 @@ class Machine(object):
     #Machine class
     def free_machine_core(self, core, current_time):
         self.free_cores[core.id] = current_time
-        return self.try_process_next_probe_in_the_queue(current_time)
+        return self.try_process_next_probe_murmuration(current_time)
 
     #Machine class
     #Assumes best fit time is always unique across tasks on the same (machine, cores).
@@ -481,9 +493,9 @@ class Machine(object):
     #Check which has the fastest completion time and process that task.
     #Re-insert the rest of the tasks back into machine queue.
     #This ensures TaskEndEvents, and hence DC time, are monotonically increasing functions.
-    def try_process_next_probe_in_the_queue(self, current_time):
+    def try_process_next_probe_murmuration(self, current_time):
         if SYSTEM_SIMULATED == "Sparrow":
-            return self.try_process_next_random_probe_single(current_time)
+            return self.try_process_next_probe_sparrow(current_time)
         events = []
         #Candidates list among all possible tasks that can execute with current free cores.
         earliest_task_completion_time = float('inf')
@@ -492,12 +504,11 @@ class Machine(object):
         candidate_task_info = None
         candidate_cores = {}
         candidate_probes_covered = Queue.PriorityQueue()
-        #print "Machine", self.id,":Inserting into candidate probes",
         while 1:
             if self.queued_probes.empty() or len(self.free_cores) == 0:
                 #Nothing to execute, or nowhere to execute
                 break
-
+            #print current_time, ":This iteration free cores are ", self.free_cores.keys()
             #First of the queued tasks in this iteration
             best_fit_time, task_info = self.queued_probes.get()
             # Extract all information
@@ -512,7 +523,11 @@ class Machine(object):
                 #Wait for the next event to trigger this task processing
                 candidate_probes_covered.put((best_fit_time, task_info))
                 #Note these cores, they are not ready to execute yet, but important to clear free_cores list.
-                #print "Best fit time", best_fit_time, "Task info", task_info, "reason - cores not yet free",
+                for core_id in core_indices:
+                     if core_id in self.free_cores.keys():
+                          candidate_cores[core_id] = self.free_cores[core_id]
+                          del self.free_cores[core_id]
+                #print "Best fit time", best_fit_time, "Task info", task_info, "reason - cores not yet free"
                 continue
 
             core_available_time = 0
@@ -520,6 +535,8 @@ class Machine(object):
                 time = self.free_cores[core_id]
                 if core_available_time < time:
                     core_available_time = time
+                candidate_cores[core_id] = self.free_cores[core_id]
+                del self.free_cores[core_id]
 
             # Take the larger of the probe arrival time and core free time to determine when the task starts executing.
             # Best fit is just a time estimate, for task completion use the exact start times and durations.
@@ -528,30 +545,26 @@ class Machine(object):
             task_actual_duration = job.actual_task_duration[task_index]
             task_completion_time = processing_start_time + task_actual_duration
             if task_completion_time < earliest_task_completion_time:
-                #Our best candidate thus far
+                #Replace our previous best candidate.
                 if earliest_task_completion_time != float('inf'):
-                    #Replace our previous best candidate.
                     candidate_probes_covered.put((candidate_best_fit_time, candidate_task_info))
-                    for core_id in candidate_cores.keys():
-                        #self.free_cores[core_id] = candidate_cores[core_id]
-                        del candidate_cores[core_id]
-                    #print "Best fit time", candidate_best_fit_time, "Task info", candidate_task_info, "reason - got a task with earlier finish",
+                    #print "Best fit time", candidate_best_fit_time, "Task info", candidate_task_info, "reason - got a task with earlier finish"
                 earliest_task_completion_time = task_completion_time
                 candidate_best_fit_time = best_fit_time
                 candidate_task_info = task_info
                 candidate_processing_time = processing_start_time
-                for core_id in core_indices:
-                    candidate_cores[core_id] = self.free_cores[core_id]
             else:
                 #Not our best candidate
                 candidate_probes_covered.put((best_fit_time, task_info))
-                #print "Best fit time", best_fit_time, "Task info", task_info, "reason - not the best candidate",
+                #print "Best fit time", best_fit_time, "Task info", task_info, "reason - not the best candidate"
 
         current_time = int(math.ceil(current_time))
         core_indices = []
         if earliest_task_completion_time == float('inf'):
-            if len(candidate_cores.keys()) != 0:
-                raise AssertionError('Found no good candidate, yet candidate cores is not empty')
+            #Reinsert all free cores other than the ones needed
+            for core_index in candidate_cores.keys():
+                if core_index not in core_indices:
+                    self.free_cores[core_index] = candidate_cores[core_index]
 
             #Reinsert all queued probes that were inspected
             while not candidate_probes_covered.empty():
@@ -569,16 +582,19 @@ class Machine(object):
         probe_arrival_time = candidate_task_info[3]
 
         task_actual_duration = job.actual_task_duration[task_index]
+        #print current_time,": Got candidate best fit time", candidate_best_fit_time, "Task duration", task_actual_duration, "Cores", core_indices
         if candidate_best_fit_time < current_time:
             #This can happen due to precision of best fit time being in integers, but not so of task durations.
             keeper.shift_holes(core_indices, candidate_best_fit_time, int(math.ceil(task_actual_duration)), current_time)
 
+            #est_time, core_list = keeper.get_machine_est_wait(self.cores, len(core_indices), current_time, task_actual_duration, False, float('inf'), None)
+            #This update happens at the worker, so inform schedulers about it.
+            #keeper.update_worker_queues_free_time(core_list, est_time, est_time + int(math.ceil(task_actual_duration)), current_time, False, None)
+
         #Reinsert all free cores other than the ones needed
         for core_index in candidate_cores.keys():
             if core_index not in core_indices:
-                raise AssertionError('Should never get here!')
-                #self.free_cores[core_index] = candidate_cores_covered[core_index]
-            del self.free_cores[core_index]
+                self.free_cores[core_index] = candidate_cores[core_index]
 
         #Reinsert all queued probes that were inspected
         while not candidate_probes_covered.empty():
@@ -586,7 +602,7 @@ class Machine(object):
             self.queued_probes.put((best_fit_time, task_info))
 
         # Finally, process the current task with all these parameters
-        task_status, new_events = simulation.get_machine_task(self, core_indices, job_id, task_index, task_actual_duration, candidate_processing_time, probe_arrival_time)
+        task_status, new_events = simulation.process_machine_task(self, core_indices, job_id, task_index, task_actual_duration, candidate_processing_time, probe_arrival_time)
         for new_event in new_events:
             events.append((new_event[0], new_event[1]))
 
@@ -594,8 +610,7 @@ class Machine(object):
 
 
     # Machine class
-    # Process one queued probes at a time.
-    def try_process_next_random_probe_single(self, current_time):
+    def try_process_next_probe_sparrow(self, current_time):
         events = []
         while 1:
             if self.queued_probes.empty() or len(self.free_cores) == 0:
@@ -638,7 +653,7 @@ class Machine(object):
             #    still enqueued till now despite cores available.
 
             # Finally, process the current task with all these parameters
-            task_status, new_events = simulation.get_machine_task(self, core_indices, job_id, task_index, task_actual_duration, current_time, probe_arrival_time)
+            task_status, new_events = simulation.process_machine_task(self, core_indices, job_id, task_index, task_actual_duration, current_time, probe_arrival_time)
             for new_event in new_events:
                 events.append((new_event[0], new_event[1]))
             break
@@ -731,7 +746,7 @@ class Simulation(object):
     # for different tasks.
     # TODO: Other strategies - bulk allocation using well-fit, not best fit for tasks
     # Hole filling strategies, etc
-    def find_workers_murmuration(self, job, current_time, scheduler_index):
+    def find_machines_murmuration(self, job, current_time, scheduler_index):
         if job.num_tasks != len(job.cpu_reqs_by_tasks):
             raise AssertionError('Number of tasks provided not equal to length of cpu_reqs_by_tasks list')
         # best_fit_for_tasks = (ma, mb, .... )
@@ -757,7 +772,7 @@ class Simulation(object):
                 raise AssertionError('Error - Got best fit time that is infinite!')
             if len(cores_at_chosen_machine) != cpu_req:
                 raise AssertionError("Not enough machines that pass filter requirement of job")
-            #print"Choosing machine", chosen_machine,":[",cores_at_chosen_machine,"] with best fit time ",best_fit_time,"for task #", task_index, " task_duration", job.actual_task_duration[task_index]," arrival time ", current_time, "requesting", cpu_req, "cores"
+            #print "Job id",job.id,"Choosing machine", chosen_machine,":[",cores_at_chosen_machine,"] with best fit time ",best_fit_time,"for task #", task_index, " task_duration", job.actual_task_duration[task_index]," arrival time ", current_time, "requesting", cpu_req, "cores"
             best_fit_for_tasks.add(chosen_machine)
 
             #Update est time at this machine and its cores
@@ -771,7 +786,7 @@ class Simulation(object):
         if SYSTEM_SIMULATED == "Sparrow":
             return self.send_machine_probes_sparrow(job, current_time, worker_indices)
         #Murmuration
-        return self.send_probes_murmuration(job, current_time, worker_indices)
+        return self.send_tasks_murmuration(job, current_time, worker_indices)
 
     #Simulation class
     def send_machine_probes_sparrow(self, job, current_time, machine_indices):
@@ -794,7 +809,7 @@ class Simulation(object):
         return task_arrival_events
 
     # Simulation class
-    def send_probes_murmuration(self, job, current_time, worker_indices):
+    def send_tasks_murmuration(self, job, current_time, worker_indices):
         self.jobs[job.id] = job
         task_arrival_events = []
  
@@ -809,7 +824,7 @@ class Simulation(object):
         # Find machines for tasks and trigger events.
         # Returns a set of machines to service tasks of the job - (m1, m2, ...).
         # May be less than the number of tasks due to same machines hosting more than one task.
-        machine_indices = self.find_workers_murmuration(job, current_time, scheduler_index)
+        machine_indices = self.find_machines_murmuration(job, current_time, scheduler_index)
         current_time += NETWORK_DELAY
         # Return task arrival events for long jobs
         for machine_id in machine_indices:
@@ -817,7 +832,7 @@ class Simulation(object):
         return task_arrival_events
 
     #Simulation class
-    def get_machine_task(self, machine, core_indices, job_id, task_index, task_duration, current_time, probe_arrival_time):
+    def process_machine_task(self, machine, core_indices, job_id, task_index, task_duration, current_time, probe_arrival_time):
         job = self.jobs[job_id]
         task_wait_time = current_time - probe_arrival_time
         scheduler_algorithm_time = probe_arrival_time - job.start_time
@@ -830,7 +845,7 @@ class Simulation(object):
         if SYSTEM_SIMULATED == "Sparrow":
             #Account for time for the probe to get task data and details.
             task_completion_time += 2 * NETWORK_DELAY
-        #print current_time, " machine ", machine.id, "cores ",core_indices, " job id ", job_id, " task index: ", task_index," task duration: ", task_duration, " arrived at ", probe_arrival_time, "and will finish at time ", task_completion_time
+        #print "Job id", job_id, current_time, " machine ", machine.id, "cores ",core_indices, " job id ", job_id, " task index: ", task_index," task duration: ", task_duration, " arrived at ", probe_arrival_time, "and will finish at time ", task_completion_time
 
         is_job_complete = job.update_task_completion_details(task_completion_time)
 
@@ -839,6 +854,7 @@ class Simulation(object):
             # Task's total time = Scheduler queue time (=0) + Scheduler Algorithm time + Machine queue wait time + Task processing time
             try:
                 print >> finished_file, task_completion_time," estimated_task_duration: ",job.estimated_task_duration, " total_job_running_time: ",(job.end_time - job.start_time), " job_id", job_id, " scheduler_algorithm_time ", scheduler_algorithm_time, " task_wait_time ", task_wait_time, " task_processing_time ", task_duration
+                #print "job id", job_id,task_completion_time," estimated_task_duration: ",job.estimated_task_duration, " total_job_running_time: ",(job.end_time - job.start_time), " job_id", job_id, " scheduler_algorithm_time ", scheduler_algorithm_time, " task_wait_time ", task_wait_time, " task_processing_time ", task_duration
             except IOError, e:
                 print "Failed writing to output file due to ", e
 
@@ -931,7 +947,7 @@ if DECENTRALIZED:
     PROTOCOL_DELAY = TOPOLOGY_HOPS * NETWORK_DELAY
 
 #log_file is 'finished_file' + "_" + TOTAL_MACHINES + "_" + CORES_PER_MACHINE + "_" + system_str
-file_name = ['finished_file', sys.argv[2], sys.argv[4], sys.argv[5], sys.argv[6], sys.argv[7]]
+file_name = ['finished_file', sys.argv[2], sys.argv[4], sys.argv[5], sys.argv[6], sys.argv[7], sys.argv[9],sys.argv[10]]
 separator = '_'
 log_file = (separator.join(file_name))
 finished_file   = open(log_file, 'w')
@@ -949,4 +965,4 @@ print >> finished_file, "Average utilization in", SYSTEM_SIMULATED, "with", TOTA
 
 finished_file.close()
 # Generate CDF data
-import os; os.system("python process.py " + log_file + " " + SYSTEM_SIMULATED + " " + WORKLOAD_FILE + " " + str(TOTAL_MACHINES)); os.remove(log_file)
+import os; os.system("pypy process.py " + log_file + " " + SYSTEM_SIMULATED + " " + WORKLOAD_FILE + " " + str(TOTAL_MACHINES)); os.remove(log_file)
