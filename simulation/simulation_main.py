@@ -356,7 +356,6 @@ class ClusterStatusKeeper(object):
             #print "Updating history hole - Core", worker_index,"best fit times for task that just got allocated", best_fit_start, best_fit_end, "its current holes", self.worker_queues_free_time_start[worker_index], self.worker_queues_free_time_end[worker_index], "current time",  current_time
         self.worker_queues_history[worker_index][current_time] = [best_fit_start, best_fit_end, scheduler_index]
 
-    #Remove outdated holes
     def update_worker_queues_free_time(self, worker_indices, best_fit_start, best_fit_end, current_time, delay, scheduler_index):
         if best_fit_start >= best_fit_end:
             raise AssertionError('Error in update_worker_queues_free_time - best fit start larger than or equal to best fit end')
@@ -406,6 +405,7 @@ class ClusterStatusKeeper(object):
                         self.update_history_holes(worker_index, current_time, best_fit_start, best_fit_end, False, scheduler_index)
                         break
 
+                # A real time update at worker should always find the hole.
                 if found_hole == False and not delay:
                     print "Could not find hole for worker", str(worker_index), "for best fit times ", best_fit_start, best_fit_end, " its holes being", self.worker_queues_free_time_start[worker_index], self.worker_queues_free_time_end[worker_index], "and history", self.worker_queues_history[worker_index]
                     raise AssertionError('No hole was found for best fit start and end at worker ' + str(worker_index))
@@ -413,10 +413,12 @@ class ClusterStatusKeeper(object):
                     task_duration = best_fit_end - best_fit_start
                     cpu_req = len(worker_indices)
                     machine_id = simulation.workers[worker_index].machine_id
-                    #print "Collision detected at worker", str(worker_index), "for best fit times ", best_fit_start, best_fit_end, " its holes being", self.worker_queues_free_time_start[worker_index], self.worker_queues_free_time_end[worker_index], "and history", self.worker_queues_history[worker_index],"at current time", current_time, "at machine", machine_id, "for num cores = ", cpu_req
+                    current_time += PROTOCOL_DELAY
+                    print "Collision detected at worker", str(worker_index), "for best fit times ", best_fit_start, best_fit_end, " its holes being", self.worker_queues_free_time_start[worker_index], self.worker_queues_free_time_end[worker_index], "and history", self.worker_queues_history[worker_index],"at current time", current_time, "at machine", machine_id, "for num cores = ", cpu_req
                     est_time, core_list = keeper.get_machine_est_wait(simulation.machines[machine_id].cores, cpu_req, current_time, task_duration, False, float('inf'), None)
-                    #This update happens at the worker, so none of the schedulers know about it.
-                    keeper.update_worker_queues_free_time(core_list, est_time, est_time + task_duration, current_time, False, None)
+                    #This update happens at the worker, so schedulers don't yet know about it.
+                    best_fit_start, worker_indices = keeper.update_worker_queues_free_time(core_list, est_time, est_time + task_duration, current_time, False, None)
+                    break
 
                 if len(self.worker_queues_free_time_start[worker_index]) != len(self.worker_queues_free_time_end[worker_index]):
                     raise AssertionError('Lengths of start and end holes are unequal')
@@ -424,6 +426,7 @@ class ClusterStatusKeeper(object):
                     raise AssertionError('Duplicate entries found in start hole array')
                 if len(set(self.worker_queues_free_time_end[worker_index])) != len(self.worker_queues_free_time_end[worker_index]):
                     raise AssertionError('Duplicate entries found in end hole array')
+        return best_fit_start, worker_indices
 
 #####################################################################################################################
 #####################################################################################################################
@@ -751,7 +754,6 @@ class Simulation(object):
             raise AssertionError('Number of tasks provided not equal to length of cpu_reqs_by_tasks list')
         # best_fit_for_tasks = (ma, mb, .... )
         best_fit_for_tasks = set()
-        current_time += NETWORK_DELAY
         machines = self.machines
         delay = True if DECENTRALIZED else False
         for task_index in xrange(job.num_tasks):
@@ -776,9 +778,9 @@ class Simulation(object):
             best_fit_for_tasks.add(chosen_machine)
 
             #Update est time at this machine and its cores
+            best_fit_time, cores_at_chosen_machine = keeper.update_worker_queues_free_time(cores_at_chosen_machine, best_fit_time, best_fit_time + int(math.ceil(job.actual_task_duration[task_index])), current_time, delay, scheduler_index)
             probe_params = [cores_at_chosen_machine, job.id, task_index, current_time]
             self.machines[chosen_machine].add_machine_probe(best_fit_time, probe_params)
-            keeper.update_worker_queues_free_time(cores_at_chosen_machine, best_fit_time, best_fit_time + int(math.ceil(job.actual_task_duration[task_index])), current_time, delay, scheduler_index)
         return best_fit_for_tasks
 
     #Simulation class
@@ -795,7 +797,7 @@ class Simulation(object):
         nr_probes = (PROBE_RATIO * job.num_tasks)
         assert nr_probes == len(machine_indices)
         machine_ids = set()
-        current_time += NETWORK_DELAY
+        current_time += PROTOCOL_DELAY
         for index in range(len(machine_indices)):
             machine_id = machine_indices[index]
             task_index = index / PROBE_RATIO
@@ -825,7 +827,6 @@ class Simulation(object):
         # Returns a set of machines to service tasks of the job - (m1, m2, ...).
         # May be less than the number of tasks due to same machines hosting more than one task.
         machine_indices = self.find_machines_murmuration(job, current_time, scheduler_index)
-        current_time += NETWORK_DELAY
         # Return task arrival events for long jobs
         for machine_id in machine_indices:
             task_arrival_events.append((current_time, ProbeEventForMachines(self.machines[machine_id])))
@@ -844,7 +845,7 @@ class Simulation(object):
         task_completion_time = task_duration + current_time
         if SYSTEM_SIMULATED == "Sparrow":
             #Account for time for the probe to get task data and details.
-            task_completion_time += 2 * NETWORK_DELAY
+            task_completion_time += 2 * PROTOCOL_DELAY
         #print "Job id", job_id, current_time, " machine ", machine.id, "cores ",core_indices, " job id ", job_id, " task index: ", task_index," task duration: ", task_duration, " arrived at ", probe_arrival_time, "and will finish at time ", task_completion_time
 
         is_job_complete = job.update_task_completion_details(task_completion_time)
