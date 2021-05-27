@@ -317,43 +317,11 @@ class ClusterStatusKeeper(object):
                 return (start_time, cores_list)
         return (float('inf'), [])
 
-    #This function is needed in the first place to ensure best fit algorithm does not make a false placement
-    #for a hole which is non existent when cores are actually freed. This is because of difference in precision
-    #between best fit time algorithm which takes ints, and actual event and task duration times which are floats.
-    #Best effort adjusting holes to reflect the true best fit start time.
-    #No need to check if it was updated or not. This is because the holes might have all
-    #been taken up end to end. In which case, the tasks will be served on their best fit and completion times.
-    def shift_holes(self, core_indices, previous_best_fit_time, task_duration, current_best_time):
-        for worker_index in core_indices:
-            found_hole = False
-            for hole_index in xrange(len(self.worker_queues_free_time_end[worker_index]) - 1):
-                end_hole = self.worker_queues_free_time_end[worker_index][hole_index]
-                start_next_hole = self.worker_queues_free_time_start[worker_index][hole_index + 1]
-                if end_hole == previous_best_fit_time and start_next_hole == (previous_best_fit_time + task_duration):
-                    found_hole = True
-                    self.worker_queues_free_time_end[worker_index][hole_index] = current_best_time
-                    self.worker_queues_free_time_start[worker_index][hole_index + 1] = current_best_time + task_duration
-                    #Are the holes of length 0? Then remove them from arrays.
-                    next_index = hole_index + 1
-                    if self.worker_queues_free_time_start[worker_index][hole_index] >= self.worker_queues_free_time_end[worker_index][hole_index]:
-                        self.worker_queues_free_time_start[worker_index].pop(hole_index)
-                        self.worker_queues_free_time_end[worker_index].pop(hole_index)
-                        next_index = hole_index
-                    if self.worker_queues_free_time_start[worker_index][next_index] >= self.worker_queues_free_time_end[worker_index][next_index]:
-                        self.worker_queues_free_time_start[worker_index].pop(next_index)
-                        self.worker_queues_free_time_end[worker_index].pop(next_index)
-                    #print "Shift hole for Core", worker_index, "is ",self.worker_queues_free_time_start[worker_index], self.worker_queues_free_time_end[worker_index]
-                    # Accordingly change history hole
-                    self.worker_queues_history[worker_index][current_best_time] = [current_best_time, current_best_time + task_duration, None]
-                    #print "Shift holes - Updated holes at Core", worker_index," is ", self.worker_queues_free_time_start[worker_index], self.worker_queues_free_time_end[worker_index]
-                    break
-
     def update_history_holes(self, worker_index, current_time, best_fit_start, best_fit_end, task_is_leaving, scheduler_index):
         if task_is_leaving:
             best_fit_start = -1 * best_fit_start
             best_fit_end   = -1 * best_fit_end
-        #else:
-            #print "Updating history hole - Core", worker_index,"best fit times for task that just got allocated", best_fit_start, best_fit_end, "its current holes", self.worker_queues_free_time_start[worker_index], self.worker_queues_free_time_end[worker_index], "current time",  current_time
+        #print "Updating history hole - Core", worker_index,"best fit times for task that just got allocated", best_fit_start, best_fit_end, "its current holes", self.worker_queues_free_time_start[worker_index], self.worker_queues_free_time_end[worker_index], "current time",  current_time
         self.worker_queues_history[worker_index][current_time] = [best_fit_start, best_fit_end, scheduler_index]
 
     def update_worker_queues_free_time(self, worker_indices, best_fit_start, best_fit_end, current_time, delay, scheduler_index):
@@ -561,7 +529,6 @@ class Machine(object):
                 candidate_probes_covered.put((best_fit_time, task_info))
                 #print "Best fit time", best_fit_time, "Task info", task_info, "reason - not the best candidate"
 
-        current_time = int(math.ceil(current_time))
         core_indices = []
         if earliest_task_completion_time == float('inf'):
             #Reinsert all free cores other than the ones needed
@@ -585,14 +552,11 @@ class Machine(object):
         probe_arrival_time = candidate_task_info[3]
 
         task_actual_duration = job.actual_task_duration[task_index]
-        #print current_time,": Got candidate best fit time", candidate_best_fit_time, "Task duration", task_actual_duration, "Cores", core_indices
-        if candidate_best_fit_time < current_time:
-            #This can happen due to precision of best fit time being in integers, but not so of task durations.
-            keeper.shift_holes(core_indices, candidate_best_fit_time, int(math.ceil(task_actual_duration)), current_time)
+        #print current_time,": Got candidate best fit time", candidate_best_fit_time, "Task duration", task_actual_duration, "Cores", core_indices, "due to finish at ", earliest_task_completion_time
 
-            #est_time, core_list = keeper.get_machine_est_wait(self.cores, len(core_indices), current_time, task_actual_duration, False, float('inf'), None)
-            #This update happens at the worker, so inform schedulers about it.
-            #keeper.update_worker_queues_free_time(core_list, est_time, est_time + int(math.ceil(task_actual_duration)), current_time, False, None)
+        if earliest_task_completion_time < current_time:
+            print current_time,": Got candidate best fit time", candidate_best_fit_time, "Task duration", task_actual_duration, "Cores", core_indices, "due to finish at ", earliest_task_completion_time
+            raise AssertionError('Unprocessed task with completion time before current time.')
 
         #Reinsert all free cores other than the ones needed
         for core_index in candidate_cores.keys():
@@ -774,7 +738,7 @@ class Simulation(object):
                 raise AssertionError('Error - Got best fit time that is infinite!')
             if len(cores_at_chosen_machine) != cpu_req:
                 raise AssertionError("Not enough machines that pass filter requirement of job")
-            #print "Job id",job.id,"Choosing machine", chosen_machine,":[",cores_at_chosen_machine,"] with best fit time ",best_fit_time,"for task #", task_index, " task_duration", job.actual_task_duration[task_index]," arrival time ", current_time, "requesting", cpu_req, "cores"
+            #print "Job id",job.id,"Choosing machine", chosen_machine,":[",cores_at_chosen_machine,"] with best fit time ",best_fit_time,"for task #", task_index, " task_duration", job.actual_task_duration[task_index]," arrival time ", current_time, "requesting", cpu_req, "cores", "core 24 has current holes - ", keeper.worker_queues_free_time_start[24], keeper.worker_queues_free_time_end[24]
             best_fit_for_tasks.add(chosen_machine)
 
             #Update est time at this machine and its cores
@@ -846,7 +810,7 @@ class Simulation(object):
         if SYSTEM_SIMULATED == "Sparrow":
             #Account for time for the probe to get task data and details.
             task_completion_time += 2 * PROTOCOL_DELAY
-        #print "Job id", job_id, current_time, " machine ", machine.id, "cores ",core_indices, " job id ", job_id, " task index: ", task_index," task duration: ", task_duration, " arrived at ", probe_arrival_time, "and will finish at time ", task_completion_time
+        #print "Job id", job_id, current_time, " machine ", machine.id, "cores ",core_indices, " job id ", job_id, " task index: ", task_index," task duration: ", task_duration, " arrived at ", probe_arrival_time, "and will finish at time ", task_completion_time, "core 24 has holes", keeper.worker_queues_free_time_start[24], keeper.worker_queues_free_time_end[24]
 
         is_job_complete = job.update_task_completion_details(task_completion_time)
 
