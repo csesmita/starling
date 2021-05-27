@@ -168,7 +168,7 @@ class ClusterStatusKeeper(object):
         if not delay:
             return self.worker_queues_free_time_start[core_id], self.worker_queues_free_time_end[core_id]
         #Adjustment for DECENTRALIZED system
-        time_limit = current_time - PROTOCOL_DELAY
+        time_limit = current_time - UPDATE_DELAY
         copied = False
         time_start = (self.worker_queues_free_time_start[core_id])
         time_end = (self.worker_queues_free_time_end[core_id])
@@ -341,7 +341,7 @@ class ClusterStatusKeeper(object):
                     break
             history = self.worker_queues_history[worker_index]
             for history_time in history.keys():
-                if current_time - PROTOCOL_DELAY > history_time:
+                if current_time - UPDATE_DELAY > history_time:
                     del history[history_time]
 
         for worker_index in worker_indices:
@@ -381,8 +381,8 @@ class ClusterStatusKeeper(object):
                     task_duration = best_fit_end - best_fit_start
                     cpu_req = len(worker_indices)
                     machine_id = simulation.workers[worker_index].machine_id
-                    current_time += PROTOCOL_DELAY
-                    print "Collision detected at worker", str(worker_index), "for best fit times ", best_fit_start, best_fit_end, " its holes being", self.worker_queues_free_time_start[worker_index], self.worker_queues_free_time_end[worker_index], "and history", self.worker_queues_history[worker_index],"at current time", current_time, "at machine", machine_id, "for num cores = ", cpu_req
+                    current_time += NETWORK_DELAY
+                    #print "Collision detected at worker", str(worker_index), "for best fit times ", best_fit_start, best_fit_end, " its holes being", self.worker_queues_free_time_start[worker_index], self.worker_queues_free_time_end[worker_index], "and history", self.worker_queues_history[worker_index],"at current time", current_time, "at machine", machine_id, "for num cores = ", cpu_req
                     est_time, core_list = keeper.get_machine_est_wait(simulation.machines[machine_id].cores, cpu_req, current_time, task_duration, False, float('inf'), None)
                     #This update happens at the worker, so schedulers don't yet know about it.
                     best_fit_start, worker_indices = keeper.update_worker_queues_free_time(core_list, est_time, est_time + task_duration, current_time, False, None)
@@ -761,7 +761,7 @@ class Simulation(object):
         nr_probes = (PROBE_RATIO * job.num_tasks)
         assert nr_probes == len(machine_indices)
         machine_ids = set()
-        current_time += PROTOCOL_DELAY
+        current_time += NETWORK_DELAY
         for index in range(len(machine_indices)):
             machine_id = machine_indices[index]
             task_index = index / PROBE_RATIO
@@ -809,7 +809,7 @@ class Simulation(object):
         task_completion_time = task_duration + current_time
         if SYSTEM_SIMULATED == "Sparrow":
             #Account for time for the probe to get task data and details.
-            task_completion_time += 2 * PROTOCOL_DELAY
+            task_completion_time += 2 * NETWORK_DELAY
         #print "Job id", job_id, current_time, " machine ", machine.id, "cores ",core_indices, " job id ", job_id, " task index: ", task_index," task duration: ", task_duration, " arrived at ", probe_arrival_time, "and will finish at time ", task_completion_time, "core 24 has holes", keeper.worker_queues_free_time_start[24], keeper.worker_queues_free_time_end[24]
 
         is_job_complete = job.update_task_completion_details(task_completion_time)
@@ -899,19 +899,18 @@ DECENTRALIZED                   = (sys.argv[7] == "DECENTRALIZED") #CENTRALIZED,
 CORE_DISTRIBUTION               = sys.argv[8]                      #STATIC, GAUSSIAN ON CORES_PER_MACHINE
 CORE_DISTRIBUTION_DEVIATION     = 2                                #if CORE_DISTRIBUTION == "GAUSSIAN"
 RATIO_SCHEDULERS_TO_CORES       = float(sys.argv[9])
-NETWORK_DELAY                   = float(sys.argv[10])
+UPDATE_DELAY                    = float(sys.argv[10])              #in seconds
 
 if RATIO_SCHEDULERS_TO_CORES > 1:
     print "Scheduler to Cores ratio cannot exceed 1"
     sys.exit(1)
 
-PROTOCOL_DELAY = 0
-# Leaf - Tor - Spine - Tor - Leaf
-TOPOLOGY_HOPS = 4
-if DECENTRALIZED:
-    PROTOCOL_DELAY = TOPOLOGY_HOPS * NETWORK_DELAY
+if not DECENTRALIZED:
+    UPDATE_DELAY = 0
 
-#log_file is 'finished_file' + "_" + TOTAL_MACHINES + "_" + CORES_PER_MACHINE + "_" + system_str
+NETWORK_DELAY = 0.0005
+
+#log_file is used for logging information on individual jobs, for JCT to be calculated later.
 file_name = ['finished_file', sys.argv[2], sys.argv[4], sys.argv[5], sys.argv[6], sys.argv[7], sys.argv[9],sys.argv[10]]
 separator = '_'
 log_file = (separator.join(file_name))
@@ -925,8 +924,8 @@ simulation.run()
 
 simulation_time = (time.time() - t1)
 print "Simulation ended in ", simulation_time, " s "
-print "Average utilization in", SYSTEM_SIMULATED, "with", TOTAL_MACHINES,"machines and",num_workers, "total workers", POLICY, "hole fitting policy and", sys.argv[7],"system is", utilization, "(simulation time:", simulation_time," total DC time:",time_elapsed_in_dc, ")", "total busyness", total_busyness
-print >> finished_file, "Average utilization in", SYSTEM_SIMULATED, "with", TOTAL_MACHINES,"machines and",num_workers, "total workers", POLICY, "hole fitting policy and", sys.argv[7],"system is", utilization, "(simulation time:", simulation_time," total DC time:",time_elapsed_in_dc, ")", "total busyness", total_busyness, "network delay is", NETWORK_DELAY, "scheduler:cores ratio", RATIO_SCHEDULERS_TO_CORES 
+print "Average utilization in", SYSTEM_SIMULATED, "with", TOTAL_MACHINES,"machines and",num_workers, "total workers", POLICY, "hole fitting policy and", sys.argv[7],"system is", utilization, "(simulation time:", simulation_time," total DC time:",time_elapsed_in_dc, ")", "total busyness", total_busyness, "update delay is", UPDATE_DELAY, "scheduler:cores ratio", RATIO_SCHEDULERS_TO_CORES
+print >> finished_file, "Average utilization in", SYSTEM_SIMULATED, "with", TOTAL_MACHINES,"machines and",num_workers, "total workers", POLICY, "hole fitting policy and", sys.argv[7],"system is", utilization, "(simulation time:", simulation_time," total DC time:",time_elapsed_in_dc, ")", "total busyness", total_busyness, "update delay is", UPDATE_DELAY, "scheduler:cores ratio", RATIO_SCHEDULERS_TO_CORES
 
 finished_file.close()
 # Generate CDF data
