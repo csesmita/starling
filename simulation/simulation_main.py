@@ -102,12 +102,10 @@ class JobArrival(Event, file):
 
         worker_indices = []
         if (SYSTEM_SIMULATED == "Murmuration"):
-            # Short or long job, find a random scheduler node for
-            # landing the job request. Note - worker queue status
-            # should be updated when a decision on workers is made.
+            # Find a random scheduler node for landing the job request.
             # worker_indices for Murmuration only indicates the
             # scheduler. send_probes() does both worker selection and
-            # sending probe requests.
+            # sending of task requests.
             worker_indices.append(random.choice(simulation.scheduler_indices))
             if self.job.id % 100 == 0:
                 print current_time, ":   Big Job arrived!!", self.job.id, " num tasks ", self.job.num_tasks, " estimated_duration ", self.job.estimated_task_duration, "simulation time", time.time() - t1
@@ -432,6 +430,12 @@ class Machine(object):
         self.num_cores = num_cores
         self.id = id
 
+        #Role of a scheduler?
+        self.scheduler = False
+        if SYSTEM_SIMULATED == "Murmuration":
+            if random.random() < RATIO_SCHEDULERS_TO_WORKERS:
+                self.scheduler = True
+
         self.cores = []
         while len(self.cores) < self.num_cores:
             core_id = worker_id_start + len(self.cores)
@@ -637,12 +641,6 @@ class Worker(object):
         # Parameter to measure how long this worker is busy in the total run.
         self.busy_time = 0.0
 
-        #Role of a scheduler?
-        self.scheduler = False
-        if SYSTEM_SIMULATED == "Murmuration":
-            if random.random() < RATIO_SCHEDULERS_TO_CORES:
-                self.scheduler = True
-
     #Worker class
     # In Murmuration, free_slot will report the same to the machine class.
     def free_slot(self, current_time):
@@ -674,10 +672,9 @@ class Simulation(object):
             self.machines.append(machine)
             workers = machine.cores
             self.workers.extend(workers)
-            for worker in workers:
-                if worker.scheduler:
-                    # Directly access scheduler indices in Simulation class
-                    self.scheduler_indices.append(worker.id)
+            if machine.scheduler:
+                # Directly access scheduler indices in Simulation class
+                self.scheduler_indices.append(machine.id)
         if SYSTEM_SIMULATED == "Murmuration":
             print "Number of schedulers ", len(self.scheduler_indices)
 
@@ -775,15 +772,15 @@ class Simulation(object):
         return task_arrival_events
 
     # Simulation class
-    def send_tasks_murmuration(self, job, current_time, worker_indices):
+    def send_tasks_murmuration(self, job, current_time, scheduler_indices):
         self.jobs[job.id] = job
         task_arrival_events = []
  
         # Some safety checks
-        if len(worker_indices) != 1:
+        if len(scheduler_indices) != 1:
             raise AssertionError('Murmuration received more than one scheduler for the job?')
         # scheduler_index denotes the exactly one scheduler node ID where this job request lands.
-        scheduler_index = worker_indices[0]
+        scheduler_index = scheduler_indices[0]
 
         # Sort all workers running long jobs in this DC according to their estimated times.
         # Ranking policy used - Least estimated time and hole duration > estimted task time.
@@ -898,10 +895,10 @@ POLICY                          = sys.argv[6]                      #RANDOM, BEST
 DECENTRALIZED                   = (sys.argv[7] == "DECENTRALIZED") #CENTRALIZED, DECENTRALIZED
 CORE_DISTRIBUTION               = sys.argv[8]                      #STATIC, GAUSSIAN ON CORES_PER_MACHINE
 CORE_DISTRIBUTION_DEVIATION     = 2                                #if CORE_DISTRIBUTION == "GAUSSIAN"
-RATIO_SCHEDULERS_TO_CORES       = float(sys.argv[9])
+RATIO_SCHEDULERS_TO_WORKERS     = float(sys.argv[9])
 UPDATE_DELAY                    = float(sys.argv[10])              #in seconds
 
-if RATIO_SCHEDULERS_TO_CORES > 1:
+if RATIO_SCHEDULERS_TO_WORKERS > 1:
     print "Scheduler to Cores ratio cannot exceed 1"
     sys.exit(1)
 
@@ -924,8 +921,8 @@ simulation.run()
 
 simulation_time = (time.time() - t1)
 print "Simulation ended in ", simulation_time, " s "
-print "Average utilization in", SYSTEM_SIMULATED, "with", TOTAL_MACHINES,"machines and",num_workers, "total workers", POLICY, "hole fitting policy and", sys.argv[7],"system is", utilization, "(simulation time:", simulation_time," total DC time:",time_elapsed_in_dc, ")", "total busyness", total_busyness, "update delay is", UPDATE_DELAY, "scheduler:cores ratio", RATIO_SCHEDULERS_TO_CORES
-print >> finished_file, "Average utilization in", SYSTEM_SIMULATED, "with", TOTAL_MACHINES,"machines and",num_workers, "total workers", POLICY, "hole fitting policy and", sys.argv[7],"system is", utilization, "(simulation time:", simulation_time," total DC time:",time_elapsed_in_dc, ")", "total busyness", total_busyness, "update delay is", UPDATE_DELAY, "scheduler:cores ratio", RATIO_SCHEDULERS_TO_CORES
+print "Average utilization in", SYSTEM_SIMULATED, "with", TOTAL_MACHINES,"machines and",num_workers, "total workers", POLICY, "hole fitting policy and", sys.argv[7],"system is", utilization, "(simulation time:", simulation_time," total DC time:",time_elapsed_in_dc, ")", "total busyness", total_busyness, "update delay is", UPDATE_DELAY, "scheduler:cores ratio", RATIO_SCHEDULERS_TO_WORKERS
+print >> finished_file, "Average utilization in", SYSTEM_SIMULATED, "with", TOTAL_MACHINES,"machines and",num_workers, "total workers", POLICY, "hole fitting policy and", sys.argv[7],"system is", utilization, "(simulation time:", simulation_time," total DC time:",time_elapsed_in_dc, ")", "total busyness", total_busyness, "update delay is", UPDATE_DELAY, "scheduler:cores ratio", RATIO_SCHEDULERS_TO_WORKERS
 
 finished_file.close()
 # Generate CDF data
