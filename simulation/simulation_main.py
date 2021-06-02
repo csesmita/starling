@@ -453,6 +453,8 @@ class Machine(object):
         #Enqueued tasks at this machine
         self.queued_probes = Queue.PriorityQueue()
 
+        self.num_tasks_processed = 0
+
     #Machine class
     def add_machine_probe(self, best_fit_time, probe_params):
         self.queued_probes.put((best_fit_time, probe_params))
@@ -717,12 +719,17 @@ class Simulation(object):
         best_fit_for_tasks = set()
         machines = self.machines
         delay = True if DECENTRALIZED else False
+        machines_set = range(TOTAL_MACHINES)
         for task_index in xrange(job.num_tasks):
             best_fit_time = float('inf')
             chosen_machine = None
             cores_at_chosen_machine = None
             cpu_req = job.cpu_reqs_by_tasks[task_index]
-            for machine_id in xrange(TOTAL_MACHINES):
+            machines_not_yet_processed = machines_set
+            while 1:
+                if not  machines_not_yet_processed:
+                    break
+                machine_id = random.choice(machines_not_yet_processed)
                 est_time, core_list = keeper.get_machine_est_wait(self.machines[machine_id].cores, cpu_req, current_time, job.actual_task_duration[task_index], delay, best_fit_time, scheduler_index)
                 if est_time < best_fit_time:
                     best_fit_time = est_time
@@ -742,6 +749,7 @@ class Simulation(object):
             best_fit_time, cores_at_chosen_machine = keeper.update_worker_queues_free_time(cores_at_chosen_machine, best_fit_time, best_fit_time + int(math.ceil(job.actual_task_duration[task_index])), current_time, delay, scheduler_index)
             probe_params = [cores_at_chosen_machine, job.id, task_index, current_time]
             self.machines[chosen_machine].add_machine_probe(best_fit_time, probe_params)
+            machines_not_yet_processed.remove(machine_id)
         return best_fit_for_tasks
 
     #Simulation class
@@ -798,6 +806,9 @@ class Simulation(object):
         job = self.jobs[job_id]
         task_wait_time = current_time - probe_arrival_time
         scheduler_algorithm_time = probe_arrival_time - job.start_time
+
+        #Collect load statistics
+        machine.num_tasks_processed += 1
 
         events = []
         job.unscheduled_tasks.remove(task_duration)
@@ -856,6 +867,8 @@ class Simulation(object):
             for new_event in new_events:
                 self.event_queue.put(new_event)
 
+        for machine in self.machines:
+            print >> load_file, machine.id, machine.num_tasks_processed
         #Free up all memory
         del self.machines[:]
         del self.scheduler_indices[:]
@@ -913,6 +926,11 @@ separator = '_'
 log_file = (separator.join(file_name))
 finished_file   = open(log_file, 'w')
 
+file_name = ['finished_file', sys.argv[2], sys.argv[4], sys.argv[5], sys.argv[6], sys.argv[7], sys.argv[9],sys.argv[10], 'load']
+load_file_name = separator.join(file_name)
+load_file = open(load_file_name,'w')
+
+
 t1 = time.time()
 simulation = Simulation(WORKLOAD_FILE, TOTAL_MACHINES)
 num_workers = len(simulation.workers)
@@ -924,6 +942,9 @@ print "Simulation ended in ", simulation_time, " s "
 print "Average utilization in", SYSTEM_SIMULATED, "with", TOTAL_MACHINES,"machines and",num_workers, "total workers", POLICY, "hole fitting policy and", sys.argv[7],"system is", utilization, "(simulation time:", simulation_time," total DC time:",time_elapsed_in_dc, ")", "total busyness", total_busyness, "update delay is", UPDATE_DELAY, "scheduler:cores ratio", RATIO_SCHEDULERS_TO_WORKERS
 print >> finished_file, "Average utilization in", SYSTEM_SIMULATED, "with", TOTAL_MACHINES,"machines and",num_workers, "total workers", POLICY, "hole fitting policy and", sys.argv[7],"system is", utilization, "(simulation time:", simulation_time," total DC time:",time_elapsed_in_dc, ")", "total busyness", total_busyness, "update delay is", UPDATE_DELAY, "scheduler:cores ratio", RATIO_SCHEDULERS_TO_WORKERS
 
+
 finished_file.close()
+load_file.close()
 # Generate CDF data
 import os; os.system("python process.py " + log_file + " " + SYSTEM_SIMULATED + " " + WORKLOAD_FILE + " " + str(TOTAL_MACHINES)); os.remove(log_file)
+os.system("python  load_murmuration.py " + load_file_name) ; os.remove(load_file_name)
