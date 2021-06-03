@@ -239,7 +239,7 @@ class ClusterStatusKeeper(object):
         all_slots_list_cores = collections.defaultdict(set)
         all_slots_fragmentation = collections.defaultdict(dict)
         inf_hole_start = {}
-        max_time_start = float('inf')
+        max_time_start = best_current_time
         for core in cores:
             core_id = core.id
             time_start, time_end = self.adjust_propagation_delay(core_id, arrival_time, delay, scheduler_index)
@@ -247,15 +247,13 @@ class ClusterStatusKeeper(object):
             if len(time_end) != len(time_start):
                 raise AssertionError('Error in get_machine_est_wait - mismatch in lengths of start and end hole arrays')
             for hole in xrange(len(time_end)):
-                if time_start[hole] > max_time_start:
-                    break
                 if time_start[hole] >= time_end[hole]:
                     print "Error in get_machine_est_wait - start of hole is equal or larger than end of hole"
                     print "Core index", core_id, "hole id ", hole, "start is ", time_start[hole], "end is ", time_end[hole]
                     print "Holes are", time_start, time_end
                     raise AssertionError('Error in get_machine_est_wait - start of hole is equal or larger than end of hole')
                 #Be done if time exceeds the present best fit
-                if time_start[hole] > best_current_time:
+                if time_start[hole] > max_time_start:
                     break
                 # Skip holes before arrival time
                 if time_end[hole] < arrival_time:
@@ -264,7 +262,7 @@ class ClusterStatusKeeper(object):
                 if time_end[hole] != float('inf'):
                     # Find all possible holes at every granularity, each lasting task_duration time.
                     end = time_end[hole] - task_duration + 1
-                    end = min(end, best_current_time)
+                    end = min(end, max_time_start)
                     #time granularity of 1.
                     arr = xrange(start, end, 1)
                     for start_chunk in arr:
@@ -274,6 +272,7 @@ class ClusterStatusKeeper(object):
                         all_slots_fragmentation[start_chunk][core_id] = max(start_chunk - start, time_end[hole] - start_chunk - task_duration)
                         if max_time_start > start_chunk and len(all_slots_list_cores[start_chunk]) >= cpu_req:
                             max_time_start = start_chunk
+                            break
                 else:
                     all_slots_list_add(start)
                     all_slots_list_cores[start].add(core_id)
@@ -281,14 +280,15 @@ class ClusterStatusKeeper(object):
                     inf_hole_start[core_id] = start
                     if max_time_start > start and len(all_slots_list_cores[start]) >= cpu_req:
                         max_time_start = start
+                        break
 
+        all_slots_list = sorted(all_slots_list)
         for core, inf_start in inf_hole_start.items():
-            for start in all_slots_list_cores.keys():
+            for start in all_slots_list:
                 if start > inf_start:
                     all_slots_list_cores[start].add(core)
                     all_slots_fragmentation[start][core] = start - inf_start
 
-        all_slots_list = sorted(all_slots_list)
         #print "Available time slots are - ", all_slots_list
         for start_time in all_slots_list:
             cores_available = len(all_slots_list_cores[start_time])
@@ -719,17 +719,17 @@ class Simulation(object):
         best_fit_for_tasks = set()
         machines = self.machines
         delay = True if DECENTRALIZED else False
-        machines_set = range(TOTAL_MACHINES)
         for task_index in xrange(job.num_tasks):
             best_fit_time = float('inf')
             chosen_machine = None
             cores_at_chosen_machine = None
             cpu_req = job.cpu_reqs_by_tasks[task_index]
-            machines_not_yet_processed = machines_set
+            machines_not_yet_processed = range(TOTAL_MACHINES)
             while 1:
-                if not  machines_not_yet_processed:
+                if not machines_not_yet_processed:
                     break
                 machine_id = random.choice(machines_not_yet_processed)
+                machines_not_yet_processed.remove(machine_id)
                 est_time, core_list = keeper.get_machine_est_wait(self.machines[machine_id].cores, cpu_req, current_time, job.actual_task_duration[task_index], delay, best_fit_time, scheduler_index)
                 if est_time < best_fit_time:
                     best_fit_time = est_time
@@ -749,7 +749,6 @@ class Simulation(object):
             best_fit_time, cores_at_chosen_machine = keeper.update_worker_queues_free_time(cores_at_chosen_machine, best_fit_time, best_fit_time + int(math.ceil(job.actual_task_duration[task_index])), current_time, delay, scheduler_index)
             probe_params = [cores_at_chosen_machine, job.id, task_index, current_time]
             self.machines[chosen_machine].add_machine_probe(best_fit_time, probe_params)
-            machines_not_yet_processed.remove(machine_id)
         return best_fit_for_tasks
 
     #Simulation class
@@ -886,18 +885,20 @@ class Simulation(object):
 
 #####################################################################################################################
 #globals
-#0.5ms delay on each link.
-job_count = 1
-
-random.seed(123456798)
-if(len(sys.argv) != 11):
-    print "Incorrect number of parameters."
-    sys.exit(1)
-
 utilization = 0.0
 time_elapsed_in_dc = 0.0
 total_busyness = 0.0
 start_time_in_dc = 0.0
+
+#0.5ms delay on each link.
+NETWORK_DELAY = 0.0005
+job_count = 1
+#Randomize the run.
+random.seed()
+
+if(len(sys.argv) != 11):
+    print "Incorrect number of parameters."
+    sys.exit(1)
 
 WORKLOAD_FILE                   = sys.argv[1]
 CORES_PER_MACHINE               = int(sys.argv[2])
@@ -917,8 +918,6 @@ if RATIO_SCHEDULERS_TO_WORKERS > 1:
 
 if not DECENTRALIZED:
     UPDATE_DELAY = 0
-
-NETWORK_DELAY = 0.0005
 
 #log_file is used for logging information on individual jobs, for JCT to be calculated later.
 file_name = ['finished_file', sys.argv[2], sys.argv[4], sys.argv[5], sys.argv[6], sys.argv[7], sys.argv[9],sys.argv[10]]
@@ -947,4 +946,4 @@ finished_file.close()
 load_file.close()
 # Generate CDF data
 import os; os.system("python process.py " + log_file + " " + SYSTEM_SIMULATED + " " + WORKLOAD_FILE + " " + str(TOTAL_MACHINES)); os.remove(log_file)
-os.system("python  load_murmuration.py " + load_file_name) ; os.remove(load_file_name)
+#os.system("python  load_murmuration.py " + load_file_name) ; os.remove(load_file_name)
