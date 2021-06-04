@@ -255,6 +255,9 @@ class ClusterStatusKeeper(object):
                 #Be done if time exceeds the present best fit
                 if time_start[hole] > max_time_start:
                     break
+                # Skip holes that are too small
+                if time_end[hole] - time_start[hole] < task_duration:
+                    continue
                 # Skip holes before arrival time
                 if time_end[hole] < arrival_time:
                     continue
