@@ -4,15 +4,14 @@
 # Copyright 2021 - Systems Research Lab, CS Department, University of Cambridge
 
 import sys
-import time
-import math
 import random
-import Queue
-import operator
-import collections
-import copy
 
-from gc import collect
+from time import time
+from math import ceil
+from Queue import PriorityQueue
+from operator import itemgetter
+from collections import deque, defaultdict
+from copy import deepcopy
 
 class Job(object):
     def __init__(self, line):
@@ -27,11 +26,11 @@ class Job(object):
         job_count += 1
         self.completed_tasks_count = 0
         self.end_time = self.start_time
-        self.unscheduled_tasks = collections.deque()
-        self.actual_task_duration = collections.deque()
-        self.cpu_reqs_by_tasks = collections.deque()
-        #self.cpu_avg_per_task = collections.deque()
-        #self.cpu_max_per_task = collections.deque()
+        self.unscheduled_tasks = deque()
+        self.actual_task_duration = deque()
+        self.cpu_reqs_by_tasks = deque()
+        #self.cpu_avg_per_task = deque()
+        #self.cpu_max_per_task = deque()
 
         self.file_task_execution_time(job_args)
         self.estimated_task_duration = mean_task_duration
@@ -57,7 +56,7 @@ class Job(object):
                # For Alibaba, normalize all cpu measurements by 100. 100 = 1 core.
                # File contains actual durations of tasks followed by
                # cpu requested per task and cpu avg and max used per task
-               self.cpu_reqs_by_tasks.appendleft(int(math.ceil(float(job_args[3 + i + self.num_tasks]))))
+               self.cpu_reqs_by_tasks.appendleft(int(ceil(float(job_args[3 + i + self.num_tasks]))))
                #self.cpu_avg_per_task.appendleft(float(job_args[3 + i + 2*self.num_tasks]))
                #self.cpu_max_per_task.appendleft(float(job_args[3 + i + 3*self.num_tasks]))
            else:
@@ -108,12 +107,11 @@ class JobArrival(Event, file):
             # sending of task requests.
             worker_indices.append(random.choice(simulation.scheduler_indices))
             if self.job.id % 100 == 0:
-                print current_time, ":   Big Job arrived!!", self.job.id, " num tasks ", self.job.num_tasks, " estimated_duration ", self.job.estimated_task_duration, "simulation time", time.time() - t1
-                collect()
+                print current_time, ":   Job arrived!!", self.job.id, " num tasks ", self.job.num_tasks, " estimated_duration ", self.job.estimated_task_duration, "simulation time", time() - t1
         else:
-            # Long job - Sparrow
+            # Sparrow
             if self.job.id % 100 == 0:
-                print current_time, ":   Big Job arrived!!", self.job.id, " num tasks ", self.job.num_tasks, " estimated_duration ", self.job.estimated_task_duration, "simulation time", time.time() - t1
+                print current_time, ":   Job arrived!!", self.job.id, " num tasks ", self.job.num_tasks, " estimated_duration ", self.job.estimated_task_duration, "simulation time", time() - t1
             worker_indices = simulation.find_machines_random(PROBE_RATIO, self.job.num_tasks, set(range(TOTAL_MACHINES)), self.job.cpu_reqs_by_tasks)
 
         new_events = simulation.send_probes(self.job, current_time, worker_indices)
@@ -157,7 +155,7 @@ class ClusterStatusKeeper(object):
            #History will be {insertion_time: [start_task_time, end_task_time, scheduler_index]} format
            #Positive task times indicate holes to be put back in.
            #Negative task times indicate holes to be removed.
-           self.worker_queues_history[i] = collections.defaultdict(list)
+           self.worker_queues_history[i] = defaultdict(list)
 
     def print_holes(self, worker_index):
         print self.worker_queues_free_time_start[worker_index], self.worker_queues_free_time_end[worker_index]
@@ -192,8 +190,8 @@ class ClusterStatusKeeper(object):
                         #This might be the case if an update was sent by the worker. So, worker's update was applied.
                         continue
                     if not copied:
-                        time_start = copy.deepcopy(self.worker_queues_free_time_start[core_id])
-                        time_end = copy.deepcopy(self.worker_queues_free_time_end[core_id])
+                        time_start = deepcopy(self.worker_queues_free_time_start[core_id])
+                        time_end = deepcopy(self.worker_queues_free_time_end[core_id])
                         copied = True
                     #Here, time_start > history_start_hole or time_end == history_start_hole
                     if time_start[hole_index] > history_start_hole:
@@ -229,15 +227,15 @@ class ClusterStatusKeeper(object):
         est_time_for_tasks = []
         cores_list_for_tasks = []
         # Generate all possible holes to fit each task (D=task duration, N = num cpus needed)
-        arrival_time = int(math.ceil(arrival_time))
+        arrival_time = int(ceil(arrival_time))
         #Fit into smallest integral duration hole
-        task_duration = int(math.ceil(task_duration))
+        task_duration = int(ceil(task_duration))
         # Number of cores requested has to be atleast equal to the number of cores on the machine
         # Filter out machines that have less than requested number of cores
         all_slots_list = set()
         all_slots_list_add = all_slots_list.add
-        all_slots_list_cores = collections.defaultdict(set)
-        all_slots_fragmentation = collections.defaultdict(dict)
+        all_slots_list_cores = defaultdict(set)
+        all_slots_fragmentation = defaultdict(dict)
         inf_hole_start = {}
         max_time_start = best_current_time
         for core in cores:
@@ -305,10 +303,10 @@ class ClusterStatusKeeper(object):
                     cores_fragmented = all_slots_fragmentation[start_time]
                     if POLICY == "WORST_FIT":
                         #Select cores with largest available hole after allocation
-                        sorted_cores_fragmented = sorted(cores_fragmented.items(), key=operator.itemgetter(1), reverse=True)[0:cpu_req]
+                        sorted_cores_fragmented = sorted(cores_fragmented.items(), key=itemgetter(1), reverse=True)[0:cpu_req]
                     elif POLICY == "BEST_FIT":
                         #Select cores with smallest available hole after allocation
-                        sorted_cores_fragmented = sorted(cores_fragmented.items(), key=operator.itemgetter(1), reverse=False)[0:cpu_req]
+                        sorted_cores_fragmented = sorted(cores_fragmented.items(), key=itemgetter(1), reverse=False)[0:cpu_req]
                     else:
                         raise AssertionError('Check the name of the policy. Should be RANDOM, WORST_FIT OR BEST_FIT')
                     cores_list = set(dict(sorted_cores_fragmented).keys())
@@ -409,7 +407,7 @@ class TaskEndEventForMachines(object):
         worker = simulation.workers[self.worker_index]
         worker.busy_time += self.task_duration
         # Task leaving is an event registered at the worker. None of the schedulers know about it, till the worker updates.
-        keeper.update_history_holes(self.worker_index, current_time, int(math.ceil(current_time - self.task_duration)), int(math.ceil(current_time)), True, None)
+        keeper.update_history_holes(self.worker_index, current_time, int(ceil(current_time - self.task_duration)), int(ceil(current_time)), True, None)
         #keeper.update_history_holes(self.worker_index, current_time, (current_time - self.task_duration), (current_time), True, None)
 
         total_busyness = 0.0
@@ -454,7 +452,7 @@ class Machine(object):
             index += 1
 
         #Enqueued tasks at this machine
-        self.queued_probes = Queue.PriorityQueue()
+        self.queued_probes = PriorityQueue()
 
         self.num_tasks_processed = 0
 
@@ -483,7 +481,7 @@ class Machine(object):
         candidate_processing_time = 0.0
         candidate_task_info = None
         candidate_cores = {}
-        candidate_probes_covered = Queue.PriorityQueue()
+        candidate_probes_covered = PriorityQueue()
         while 1:
             if self.queued_probes.empty() or len(self.free_cores) == 0:
                 #Nothing to execute, or nowhere to execute
@@ -659,7 +657,7 @@ class Simulation(object):
     def __init__(self, WORKLOAD_FILE, nr_workers):
         TOTAL_MACHINES = int(nr_workers)
         self.jobs = {}
-        self.event_queue = Queue.PriorityQueue()
+        self.event_queue = PriorityQueue()
         self.workers = []
         self.machines = []
         self.scheduler_indices = []
@@ -738,7 +736,7 @@ class Simulation(object):
                     best_fit_time = est_time
                     chosen_machine = machine_id
                     cores_at_chosen_machine = core_list
-                if best_fit_time == int(math.ceil(current_time)):
+                if best_fit_time == int(ceil(current_time)):
                     #Can't do any better
                     break
             if best_fit_time == float('inf') or chosen_machine == None or cores_at_chosen_machine == None:
@@ -749,7 +747,7 @@ class Simulation(object):
             best_fit_for_tasks.add(chosen_machine)
 
             #Update est time at this machine and its cores
-            best_fit_time, cores_at_chosen_machine = keeper.update_worker_queues_free_time(cores_at_chosen_machine, best_fit_time, best_fit_time + int(math.ceil(job.actual_task_duration[task_index])), current_time, delay, scheduler_index)
+            best_fit_time, cores_at_chosen_machine = keeper.update_worker_queues_free_time(cores_at_chosen_machine, best_fit_time, best_fit_time + int(ceil(job.actual_task_duration[task_index])), current_time, delay, scheduler_index)
             probe_params = [cores_at_chosen_machine, job.id, task_index, current_time]
             self.machines[chosen_machine].add_machine_probe(best_fit_time, probe_params)
         return best_fit_for_tasks
@@ -933,13 +931,13 @@ load_file_name = separator.join(file_name)
 load_file = open(load_file_name,'w')
 
 
-t1 = time.time()
+t1 = time()
 simulation = Simulation(WORKLOAD_FILE, TOTAL_MACHINES)
 num_workers = len(simulation.workers)
 keeper = ClusterStatusKeeper(num_workers)
 simulation.run()
 
-simulation_time = (time.time() - t1)
+simulation_time = (time() - t1)
 print "Simulation ended in ", simulation_time, " s "
 print "Average utilization in", SYSTEM_SIMULATED, "with", TOTAL_MACHINES,"machines and",num_workers, "total workers", POLICY, "hole fitting policy and", sys.argv[7],"system is", utilization, "(simulation time:", simulation_time," total DC time:",time_elapsed_in_dc, ")", "total busyness", total_busyness, "update delay is", UPDATE_DELAY, "scheduler:cores ratio", RATIO_SCHEDULERS_TO_WORKERS
 print >> finished_file, "Average utilization in", SYSTEM_SIMULATED, "with", TOTAL_MACHINES,"machines and",num_workers, "total workers", POLICY, "hole fitting policy and", sys.argv[7],"system is", utilization, "(simulation time:", simulation_time," total DC time:",time_elapsed_in_dc, ")", "total busyness", total_busyness, "update delay is", UPDATE_DELAY, "scheduler:cores ratio", RATIO_SCHEDULERS_TO_WORKERS
