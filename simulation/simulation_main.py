@@ -359,6 +359,7 @@ class ClusterStatusKeeper(object):
                         self.worker_queues_free_time_start[worker_index].pop(hole_index)
                         self.worker_queues_free_time_end[worker_index].pop(hole_index)
                         if start_hole == best_fit_start and end_hole == best_fit_end:
+                            self.update_history_holes(worker_index, current_time, best_fit_start, best_fit_end, False, scheduler_index)
                             break
                         insert_position = hole_index
                         if start_hole < best_fit_start:
