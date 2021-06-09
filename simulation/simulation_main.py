@@ -867,9 +867,8 @@ class Simulation(object):
             for new_event in new_events:
                 self.event_queue.put(new_event)
 
-        if LOG_LOAD_STATS:
-            for machine in self.machines:
-                print >> load_file, machine.id, machine.num_tasks_processed
+        #for machine in self.machines:
+        #    print >> load_file, machine.id, machine.num_tasks_processed
         #Free up all memory
         del self.machines[:]
         del self.scheduler_indices[:]
@@ -927,14 +926,11 @@ separator = '_'
 log_file = (separator.join(file_name))
 finished_file   = open(log_file, 'w')
 
-LOG_LOAD_STATS = False
-file_name = ['finished_file', sys.argv[2], sys.argv[4], sys.argv[5], sys.argv[6], sys.argv[7], sys.argv[9],sys.argv[10], 'load']
-load_file_name = separator.join(file_name)
-if LOG_LOAD_STATS:
-    load_file = open(load_file_name,'w')
+#file_name = ['finished_file', sys.argv[2], sys.argv[4], sys.argv[5], sys.argv[6], sys.argv[7], sys.argv[9],sys.argv[10], 'load']
+#load_file_name = separator.join(file_name)
+#load_file = open(load_file_name,'w')
 
 
-import subprocess ; label = subprocess.check_output(["git", "describe", "--always"]).strip(); print "Git version - ", label
 t1 = time()
 simulation = Simulation(WORKLOAD_FILE, TOTAL_MACHINES)
 num_workers = len(simulation.workers)
@@ -943,14 +939,12 @@ simulation.run()
 
 simulation_time = (time() - t1)
 print "Simulation ended in ", simulation_time, " s "
-print "Average utilization in", SYSTEM_SIMULATED, "with", TOTAL_MACHINES,"machines and",num_workers, "total workers", POLICY, "hole fitting policy and", sys.argv[7],"system is", utilization, "(simulation time:", simulation_time," total DC time:",time_elapsed_in_dc, ")", "total busyness", total_busyness, "update delay is", UPDATE_DELAY, "scheduler:cores ratio", RATIO_SCHEDULERS_TO_WORKERS,".Git version -", label
-print >> finished_file, "Average utilization in", SYSTEM_SIMULATED, "with", TOTAL_MACHINES,"machines and",num_workers, "total workers", POLICY, "hole fitting policy and", sys.argv[7],"system is", utilization, "(simulation time:", simulation_time," total DC time:",time_elapsed_in_dc, ")", "total busyness", total_busyness, "update delay is", UPDATE_DELAY, "scheduler:cores ratio", RATIO_SCHEDULERS_TO_WORKERS,".Git version -", label
+print "Average utilization in", SYSTEM_SIMULATED, "with", TOTAL_MACHINES,"machines and",num_workers, "total workers", POLICY, "hole fitting policy and", sys.argv[7],"system is", utilization, "(simulation time:", simulation_time," total DC time:",time_elapsed_in_dc, ")", "total busyness", total_busyness, "update delay is", UPDATE_DELAY, "scheduler:cores ratio", RATIO_SCHEDULERS_TO_WORKERS
+print >> finished_file, "Average utilization in", SYSTEM_SIMULATED, "with", TOTAL_MACHINES,"machines and",num_workers, "total workers", POLICY, "hole fitting policy and", sys.argv[7],"system is", utilization, "(simulation time:", simulation_time," total DC time:",time_elapsed_in_dc, ")", "total busyness", total_busyness, "update delay is", UPDATE_DELAY, "scheduler:cores ratio", RATIO_SCHEDULERS_TO_WORKERS
 
 
 finished_file.close()
-if LOG_LOAD_STATS:
-    load_file.close()
+#load_file.close()
 # Generate CDF data
 import os; os.system("python process.py " + log_file + " " + SYSTEM_SIMULATED + " " + WORKLOAD_FILE + " " + str(TOTAL_MACHINES)); os.remove(log_file)
-#if LOG_LOAD_STATS:
-    #os.system("python  load_murmuration.py " + load_file_name) ; os.remove(load_file_name)
+#os.system("python  load_murmuration.py " + load_file_name) ; os.remove(load_file_name)
