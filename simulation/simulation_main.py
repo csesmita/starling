@@ -149,7 +149,7 @@ class ClusterStatusKeeper(object):
         self.worker_queues_free_time_start = {}
         #Array of history in order to simulate delayed updates
         self.worker_queues_history = {}
-        for i in xrange(0, num_workers):
+        for i in range(0, num_workers):
            self.worker_queues_free_time_start[i] = [0]
            self.worker_queues_free_time_end[i] = [float('inf')]
            #History will be {insertion_time: [start_task_time, end_task_time, scheduler_index]} format
@@ -177,7 +177,7 @@ class ClusterStatusKeeper(object):
             if scheduler_index is not None and scheduler_index == new_scheduler_index:
                 #The same scheduler had placed this history placement, so it knows about it.
                 continue
-            for hole_index in xrange(len(time_start)):
+            for hole_index in range(len(time_start)):
                 if time_end[hole_index] < abs(history_hole[0]):
                     continue
                 if history_hole[0] >= 0 and history_hole[1] >= 0:
@@ -244,7 +244,7 @@ class ClusterStatusKeeper(object):
             #print "For core", core_id,"got holes - ", time_start, time_end
             if len(time_end) != len(time_start):
                 raise AssertionError('Error in get_machine_est_wait - mismatch in lengths of start and end hole arrays')
-            for hole in xrange(len(time_end)):
+            for hole in range(len(time_end)):
                 if time_start[hole] >= time_end[hole]:
                     print "Error in get_machine_est_wait - start of hole is equal or larger than end of hole"
                     print "Core index", core_id, "hole id ", hole, "start is ", time_start[hole], "end is ", time_end[hole]
@@ -265,7 +265,7 @@ class ClusterStatusKeeper(object):
                     end = time_end[hole] - task_duration + 1
                     end = min(end, max_time_start)
                     #time granularity of 1.
-                    arr = xrange(start, end, 1)
+                    arr = range(start, end, 1)
                     for start_chunk in arr:
                         #print "[t=",arrival_time,"] For core ", core_id," fitting task of duration", task_duration,"into hole = ", time_start[hole], time_end[hole], "starting at", start_chunk
                         all_slots_list_add(start_chunk)
@@ -349,7 +349,7 @@ class ClusterStatusKeeper(object):
                 # Order : start_hole, best_fit_start, best_fit_end, end_hole
                 # Find first start just less than or equal to best_fit_start
                 #print "Core", worker_index, "holes - for best fit (",best_fit_start, best_fit_end,") is "
-                for hole_index in xrange(len(self.worker_queues_free_time_start[worker_index])):
+                for hole_index in range(len(self.worker_queues_free_time_start[worker_index])):
                     start_hole = self.worker_queues_free_time_start[worker_index][hole_index]
                     end_hole = self.worker_queues_free_time_end[worker_index][hole_index]
                     #print "(",start_hole, end_hole,")"
@@ -720,7 +720,7 @@ class Simulation(object):
         best_fit_for_tasks = set()
         machines = self.machines
         delay = True if DECENTRALIZED else False
-        for task_index in xrange(job.num_tasks):
+        for task_index in range(job.num_tasks):
             best_fit_time = float('inf')
             chosen_machine = None
             cores_at_chosen_machine = None
@@ -939,8 +939,9 @@ simulation.run()
 
 simulation_time = (time() - t1)
 print "Simulation ended in ", simulation_time, " s "
-print "Average utilization in", SYSTEM_SIMULATED, "with", TOTAL_MACHINES,"machines and",num_workers, "total workers", POLICY, "hole fitting policy and", sys.argv[7],"system is", utilization, "(simulation time:", simulation_time," total DC time:",time_elapsed_in_dc, ")", "total busyness", total_busyness, "update delay is", UPDATE_DELAY, "scheduler:cores ratio", RATIO_SCHEDULERS_TO_WORKERS
-print >> finished_file, "Average utilization in", SYSTEM_SIMULATED, "with", TOTAL_MACHINES,"machines and",num_workers, "total workers", POLICY, "hole fitting policy and", sys.argv[7],"system is", utilization, "(simulation time:", simulation_time," total DC time:",time_elapsed_in_dc, ")", "total busyness", total_busyness, "update delay is", UPDATE_DELAY, "scheduler:cores ratio", RATIO_SCHEDULERS_TO_WORKERS
+import subprocess ; label = subprocess.check_output(["git", "describe"]).strip()
+print "Average utilization in", SYSTEM_SIMULATED, "with", TOTAL_MACHINES,"machines and",num_workers, "total workers", POLICY, "hole fitting policy and", sys.argv[7],"system is", utilization, "(simulation time:", simulation_time," total DC time:",time_elapsed_in_dc, ")", "total busyness", total_busyness, "update delay is", UPDATE_DELAY, "scheduler:cores ratio", RATIO_SCHEDULERS_TO_WORKERS,".Git version -", label
+print >> finished_file, "Average utilization in", SYSTEM_SIMULATED, "with", TOTAL_MACHINES,"machines and",num_workers, "total workers", POLICY, "hole fitting policy and", sys.argv[7],"system is", utilization, "(simulation time:", simulation_time," total DC time:",time_elapsed_in_dc, ")", "total busyness", total_busyness, "update delay is", UPDATE_DELAY, "scheduler:cores ratio", RATIO_SCHEDULERS_TO_WORKERS,".Git version -", label
 
 
 finished_file.close()
