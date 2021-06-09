@@ -867,8 +867,9 @@ class Simulation(object):
             for new_event in new_events:
                 self.event_queue.put(new_event)
 
-        for machine in self.machines:
-            print >> load_file, machine.id, machine.num_tasks_processed
+        if LOG_LOAD_STATS:
+            for machine in self.machines:
+                print >> load_file, machine.id, machine.num_tasks_processed
         #Free up all memory
         del self.machines[:]
         del self.scheduler_indices[:]
@@ -926,9 +927,11 @@ separator = '_'
 log_file = (separator.join(file_name))
 finished_file   = open(log_file, 'w')
 
+LOG_LOAD_STATS = False
 file_name = ['finished_file', sys.argv[2], sys.argv[4], sys.argv[5], sys.argv[6], sys.argv[7], sys.argv[9],sys.argv[10], 'load']
 load_file_name = separator.join(file_name)
-load_file = open(load_file_name,'w')
+if LOG_LOAD_STATS:
+    load_file = open(load_file_name,'w')
 
 
 t1 = time()
@@ -945,7 +948,9 @@ print >> finished_file, "Average utilization in", SYSTEM_SIMULATED, "with", TOTA
 
 
 finished_file.close()
-load_file.close()
+if LOG_LOAD_STATS:
+    load_file.close()
 # Generate CDF data
 import os; os.system("python process.py " + log_file + " " + SYSTEM_SIMULATED + " " + WORKLOAD_FILE + " " + str(TOTAL_MACHINES)); os.remove(log_file)
-#os.system("python  load_murmuration.py " + load_file_name) ; os.remove(load_file_name)
+#if LOG_LOAD_STATS:
+    #os.system("python  load_murmuration.py " + load_file_name) ; os.remove(load_file_name)
