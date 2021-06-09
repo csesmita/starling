@@ -934,6 +934,7 @@ if LOG_LOAD_STATS:
     load_file = open(load_file_name,'w')
 
 
+import subprocess ; label = subprocess.check_output(["git", "describe", "--always"]).strip(); print "Git version - ", label
 t1 = time()
 simulation = Simulation(WORKLOAD_FILE, TOTAL_MACHINES)
 num_workers = len(simulation.workers)
@@ -942,7 +943,6 @@ simulation.run()
 
 simulation_time = (time() - t1)
 print "Simulation ended in ", simulation_time, " s "
-import subprocess ; label = subprocess.check_output(["git", "describe"]).strip()
 print "Average utilization in", SYSTEM_SIMULATED, "with", TOTAL_MACHINES,"machines and",num_workers, "total workers", POLICY, "hole fitting policy and", sys.argv[7],"system is", utilization, "(simulation time:", simulation_time," total DC time:",time_elapsed_in_dc, ")", "total busyness", total_busyness, "update delay is", UPDATE_DELAY, "scheduler:cores ratio", RATIO_SCHEDULERS_TO_WORKERS,".Git version -", label
 print >> finished_file, "Average utilization in", SYSTEM_SIMULATED, "with", TOTAL_MACHINES,"machines and",num_workers, "total workers", POLICY, "hole fitting policy and", sys.argv[7],"system is", utilization, "(simulation time:", simulation_time," total DC time:",time_elapsed_in_dc, ")", "total busyness", total_busyness, "update delay is", UPDATE_DELAY, "scheduler:cores ratio", RATIO_SCHEDULERS_TO_WORKERS,".Git version -", label
 
