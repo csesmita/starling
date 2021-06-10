@@ -303,10 +303,10 @@ class ClusterStatusKeeper(object):
                     cores_fragmented = all_slots_fragmentation[start_time]
                     if POLICY == "WORST_FIT":
                         #Select cores with largest available hole after allocation
-                        sorted_cores_fragmented = sorted(cores_fragmented.items(), key=itemgetter(1), reverse=True)[0:cpu_req]
+                        sorted_cores_fragmented = sorted(cores_fragmented.items(), key=lambda v: (v[1], random.random()), reverse=True)[0:cpu_req]
                     elif POLICY == "BEST_FIT":
                         #Select cores with smallest available hole after allocation
-                        sorted_cores_fragmented = sorted(cores_fragmented.items(), key=itemgetter(1), reverse=False)[0:cpu_req]
+                        sorted_cores_fragmented = sorted(cores_fragmented.items(), key=lambda v: (v[1], random.random()), reverse=False)[0:cpu_req]
                     else:
                         raise AssertionError('Check the name of the policy. Should be RANDOM, WORST_FIT OR BEST_FIT')
                     cores_list = set(dict(sorted_cores_fragmented).keys())
