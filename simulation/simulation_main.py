@@ -398,29 +398,35 @@ class ClusterStatusKeeper(object):
 
 #####################################################################################################################
 #####################################################################################################################
-class TaskEndEventForMachines(object):
-    def __init__(self, worker_index, task_duration):
-        self.worker_index = worker_index
+class TaskEndEvent(object):
+    def __init__(self, worker_indices, task_duration):
+        self.worker_indices = worker_indices
         self.task_duration = task_duration
 
     def run(self, current_time):
-        global start_time_in_dc
-        worker = simulation.workers[self.worker_index]
-        worker.busy_time += self.task_duration
-        # Task leaving is an event registered at the worker. None of the schedulers know about it, till the worker updates.
-        keeper.update_history_holes(self.worker_index, current_time, int(ceil(current_time - self.task_duration)), int(ceil(current_time)), True, None)
-        #keeper.update_history_holes(self.worker_index, current_time, (current_time - self.task_duration), (current_time), True, None)
+        #global start_time_in_dc
+        events = []
+        for worker_index in self.worker_indices:
+            worker = simulation.workers[worker_index]
+            worker.busy_time += self.task_duration
+            # Task leaving is an event registered at the worker. None of the schedulers know about it, till the worker updates.
+            keeper.update_history_holes(worker_index, current_time, int(ceil(current_time - self.task_duration)), int(ceil(current_time)), True, None)
 
-        total_busyness = 0.0
-        num_workers = len(simulation.workers)
-        for temp_worker in simulation.workers:
-            total_busyness += temp_worker.busy_time
-        # Calculate utilizations of worker machines in DC
-        time_elapsed_in_dc = current_time - start_time_in_dc
-        utilization = 100 * (float(total_busyness) / float(time_elapsed_in_dc * num_workers))
-        #print "Task duration", self.task_duration,"Average utilization with ",num_workers, "total workers is", utilization, "(total DC time:",time_elapsed_in_dc, ")", "total busyness", total_busyness
+            '''
+            total_busyness = 0.0
+            num_workers = len(simulation.workers)
+            for temp_worker in simulation.workers:
+                total_busyness += temp_worker.busy_time
+            # Calculate utilizations of worker machines in DC
+            time_elapsed_in_dc = current_time - start_time_in_dc
+            utilization = 100 * (float(total_busyness) / float(time_elapsed_in_dc * num_workers))
+            #print "Task duration", self.task_duration,"Average utilization with ",num_workers, "total workers is", utilization, "(total DC time:",time_elapsed_in_dc, ")", "total busyness", total_busyness
+            '''
+            new_events = worker.free_slot(current_time)
+            for new_event in new_events:
+                events.append(new_event)
 
-        return worker.free_slot(current_time)
+        return events
 
 
 #####################################################################################################################
@@ -577,9 +583,9 @@ class Machine(object):
             self.queued_probes.put((best_fit_time, task_info))
 
         # Finally, process the current task with all these parameters
-        task_status, new_events = simulation.process_machine_task(self, core_indices, job_id, task_index, task_actual_duration, candidate_processing_time, probe_arrival_time)
+        new_events = simulation.process_machine_task(self, core_indices, job_id, task_index, task_actual_duration, candidate_processing_time, probe_arrival_time)
         for new_event in new_events:
-            events.append((new_event[0], new_event[1]))
+            events.append(new_event)
 
         return events
 
@@ -628,7 +634,7 @@ class Machine(object):
             #    still enqueued till now despite cores available.
 
             # Finally, process the current task with all these parameters
-            task_status, new_events = simulation.process_machine_task(self, core_indices, job_id, task_index, task_actual_duration, current_time, probe_arrival_time)
+            new_events = simulation.process_machine_task(self, core_indices, job_id, task_index, task_actual_duration, current_time, probe_arrival_time)
             for new_event in new_events:
                 events.append((new_event[0], new_event[1]))
             break
@@ -832,15 +838,14 @@ class Simulation(object):
             except IOError, e:
                 print "Failed writing to output file due to ", e
 
-        for core_index in core_indices:
-            events.append((task_completion_time, TaskEndEventForMachines(core_index, task_duration)))
+        events.append((task_completion_time, TaskEndEvent(core_indices, task_duration)))
         if is_job_complete:
             del job.unscheduled_tasks
             del job.actual_task_duration
             del job.cpu_reqs_by_tasks
             del self.jobs[job.id]
 
-        return True, events
+        return events
 
     #Simulation class
     def run(self):
