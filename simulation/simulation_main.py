@@ -399,12 +399,26 @@ class ClusterStatusKeeper(object):
 #####################################################################################################################
 #####################################################################################################################
 class TaskEndEvent(object):
-    def __init__(self, worker_indices, task_duration):
+    def __init__(self, worker_indices, task_duration, job_id, task_wait_time):
         self.worker_indices = worker_indices
         self.task_duration = task_duration
+        self.job_id = job_id
+        self.task_wait_time = task_wait_time
 
     def run(self, current_time):
         #global start_time_in_dc
+        job = simulation.jobs[self.job_id]
+        is_job_complete = job.update_task_completion_details(current_time)
+
+        if is_job_complete:
+            simulation.jobs_completed += 1
+            # Task's total time = Scheduler queue time (=0) + Scheduler Algorithm time + Machine queue wait time + Task processing time
+            try:
+                print >> finished_file, current_time," estimated_task_duration: ",job.estimated_task_duration, " total_job_running_time: ",(job.end_time - job.start_time), " job_id", job.id, " scheduler_algorithm_time ", 0.0, " task_wait_time ", self.task_wait_time, " task_processing_time ", self.task_duration
+            except IOError, e:
+                print "Failed writing to output file due to ", e
+
+
         events = []
         for worker_index in self.worker_indices:
             worker = simulation.workers[worker_index]
@@ -425,6 +439,12 @@ class TaskEndEvent(object):
             new_events = worker.free_slot(current_time)
             for new_event in new_events:
                 events.append(new_event)
+
+        if is_job_complete:
+            del job.unscheduled_tasks
+            del job.actual_task_duration
+            del job.cpu_reqs_by_tasks
+            del simulation.jobs[job.id]
 
         return events
 
@@ -750,7 +770,7 @@ class Simulation(object):
                 raise AssertionError('Error - Got best fit time that is infinite!')
             if len(cores_at_chosen_machine) != cpu_req:
                 raise AssertionError("Not enough machines that pass filter requirement of job")
-            #print "Job id",job.id,"Choosing machine", chosen_machine,":[",cores_at_chosen_machine,"] with best fit time ",best_fit_time,"for task #", task_index, " task_duration", job.actual_task_duration[task_index]," arrival time ", current_time, "requesting", cpu_req, "cores", "core 24 has current holes - ", keeper.worker_queues_free_time_start[24], keeper.worker_queues_free_time_end[24]
+            #print "Job id",job.id,"Choosing machine", chosen_machine,":[",cores_at_chosen_machine,"] with best fit time ",best_fit_time,"for task #", task_index, " task_duration", job.actual_task_duration[task_index]," arrival time ", current_time, "requesting", cpu_req, "cores"
             best_fit_for_tasks.add(chosen_machine)
 
             #Update est time at this machine and its cores
@@ -812,39 +832,19 @@ class Simulation(object):
     def process_machine_task(self, machine, core_indices, job_id, task_index, task_duration, current_time, probe_arrival_time):
         job = self.jobs[job_id]
         task_wait_time = current_time - probe_arrival_time
-        scheduler_algorithm_time = probe_arrival_time - job.start_time
 
         #Collect load statistics
         machine.num_tasks_processed += 1
 
         events = []
         job.unscheduled_tasks.remove(task_duration)
-        # Machine busy time should be a sum of worker busy times.
-        workers = self.workers
         task_completion_time = task_duration + current_time
         if SYSTEM_SIMULATED == "Sparrow":
             #Account for time for the probe to get task data and details.
             task_completion_time += 2 * NETWORK_DELAY
-        #print "Job id", job_id, current_time, " machine ", machine.id, "cores ",core_indices, " job id ", job_id, " task index: ", task_index," task duration: ", task_duration, " arrived at ", probe_arrival_time, "and will finish at time ", task_completion_time, "core 24 has holes", keeper.worker_queues_free_time_start[24], keeper.worker_queues_free_time_end[24]
+        #print "Job id", job_id, current_time, " machine ", machine.id, "cores ",core_indices, " job id ", job_id, " task index: ", task_index," task duration: ", task_duration, " arrived at ", probe_arrival_time, "and will finish at time ", task_completion_time
 
-        is_job_complete = job.update_task_completion_details(task_completion_time)
-
-        if is_job_complete:
-            self.jobs_completed += 1
-            # Task's total time = Scheduler queue time (=0) + Scheduler Algorithm time + Machine queue wait time + Task processing time
-            try:
-                print >> finished_file, task_completion_time," estimated_task_duration: ",job.estimated_task_duration, " total_job_running_time: ",(job.end_time - job.start_time), " job_id", job_id, " scheduler_algorithm_time ", scheduler_algorithm_time, " task_wait_time ", task_wait_time, " task_processing_time ", task_duration
-                #print "job id", job_id,task_completion_time," estimated_task_duration: ",job.estimated_task_duration, " total_job_running_time: ",(job.end_time - job.start_time), " job_id", job_id, " scheduler_algorithm_time ", scheduler_algorithm_time, " task_wait_time ", task_wait_time, " task_processing_time ", task_duration
-            except IOError, e:
-                print "Failed writing to output file due to ", e
-
-        events.append((task_completion_time, TaskEndEvent(core_indices, task_duration)))
-        if is_job_complete:
-            del job.unscheduled_tasks
-            del job.actual_task_duration
-            del job.cpu_reqs_by_tasks
-            del self.jobs[job.id]
-
+        events.append((task_completion_time, TaskEndEvent(core_indices, task_duration, job_id, task_wait_time)))
         return events
 
     #Simulation class
