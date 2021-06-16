@@ -636,7 +636,7 @@ class Machine(object):
             # Finally, process the current task with all these parameters
             new_events = simulation.process_machine_task(self, core_indices, job_id, task_index, task_actual_duration, current_time, probe_arrival_time)
             for new_event in new_events:
-                events.append((new_event[0], new_event[1]))
+                events.append(new_event)
             break
 
         return events
