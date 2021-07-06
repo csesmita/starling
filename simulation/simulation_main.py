@@ -164,53 +164,118 @@ class ClusterStatusKeeper(object):
         if not delay:
             return self.worker_queues_free_time_start[core_id], self.worker_queues_free_time_end[core_id]
         #Adjustment for DECENTRALIZED system
-        time_limit = current_time - UPDATE_DELAY
+        current_time = int(ceil(current_time))
+        worker_time_limit = current_time - 2*UPDATE_DELAY if current_time > 2*UPDATE_DELAY else 0
+        scheduler_time_limit = current_time - UPDATE_DELAY if current_time > UPDATE_DELAY else 0
         copied = False
         time_start = (self.worker_queues_free_time_start[core_id])
         time_end = (self.worker_queues_free_time_end[core_id])
-        for history_list in sorted(self.worker_queues_history[core_id].items(), reverse=True):
-            history_time = history_list[0]
-            history_hole = history_list[1]
-            if history_time < time_limit:
-                continue
-            scheduler_index = history_hole[2]
-            if scheduler_index is not None and scheduler_index == new_scheduler_index:
-                #The same scheduler had placed this history placement, so it knows about it.
-                continue
-            for hole_index in range(len(time_start)):
-                if time_end[hole_index] < abs(history_hole[0]):
+        scheduler_placement = []
+        #Apply reversals in the reverse order, starting fron the most recent.
+        for history_time, history_lists in sorted(self.worker_queues_history[core_id].items(), reverse=True):
+            #Worker placements are seen after 2*Update_Delay.
+            #Other Scheduler placements are seen after Update_Delay.
+            #Self Scheduler placements are seen with 0 delay.
+            if history_time < worker_time_limit:
+                break
+            for history_list in reversed(history_lists):
+                history_hole_start = history_list[0]
+                history_hole_end = history_list[1]
+                scheduler_index = history_list[2]
+                has_collision = history_list[3]
+                #Placement by self scheduler is known.
+                if scheduler_index is not None and scheduler_index == new_scheduler_index:
+                    #The same scheduler had placed this history placement, so it knows about it.
+                    scheduler_placement.append((history_hole_start, history_hole_end))
                     continue
-                if history_hole[0] >= 0 and history_hole[1] >= 0:
-                    history_start_hole = history_hole[0]
-                    history_end_hole = history_hole[1]
+                #Placement by other schedulers beyond scheduler limit is also known, even if colliding.
+                if scheduler_index is not None and history_time < scheduler_time_limit:
+                    scheduler_placement.append((history_hole_start, history_hole_end))
+                    continue
+                #Recent colliding placement by other schedulers is not seen, or recorded in worker holes.
+                #Therefore, no-op.
+                if scheduler_index is not None and history_time >= scheduler_time_limit and has_collision:
+                    continue
+                #Placement by workers within worker limit and by other schedulers within scheduler limit
+                #is not seen (ones without collision). So, have to be reversed in the scheduler view.
+                for hole_index in range(len(time_start)):
+                    if time_end[hole_index] < history_hole_start:
+                        continue
                     #New tasks assigned reflect as positive holes.
                     #History hole cannot start in a currently existing hole,
                     #else it would've been captured in history.
-                    if time_start[hole_index] <= history_start_hole and history_start_hole < time_end[hole_index]:
-                        #This might be the case if an update was sent by the worker. So, worker's update was applied.
-                        continue
+                    if time_start[hole_index] <= history_hole_start and history_hole_start < time_end[hole_index]:
+                        print "Got history hole in between an existing hole. History start and end is ", history_hole_start, history_hole_end,
+                        print "Time start and end are", time_start, time_end
+                        raise AssertionError('Got a strange case, when history starts in between an existing hole.')
+                    if time_start[hole_index] < history_hole_end and history_hole_end <= time_end[hole_index]:
+                        print "Got history hole in between an existing hole. History start and end is ", history_hole_start, history_hole_end,
+                        print "Time start and end are", time_start, time_end
+                        raise AssertionError('Got a strange case, when history starts in between an existing hole.')
                     if not copied:
                         time_start = deepcopy(self.worker_queues_free_time_start[core_id])
                         time_end = deepcopy(self.worker_queues_free_time_end[core_id])
                         copied = True
-                    #Here, time_start > history_start_hole or time_end == history_start_hole
-                    if time_start[hole_index] > history_start_hole:
-                        if time_start[hole_index] == history_end_hole:
+                    #Here, time_start > history_hole_start or time_end == history_hole_start
+                    if time_start[hole_index] > history_hole_start:
+                        if time_start[hole_index] == history_hole_end:
                             time_start.pop(hole_index)
-                            time_start.insert(hole_index, history_start_hole)
+                            time_start.insert(hole_index, history_hole_start)
                         else:
-                            time_start.insert(hole_index, history_start_hole)
-                            time_end.insert(hole_index, history_end_hole)
-                    if time_end[hole_index] == history_start_hole:
+                            time_start.insert(hole_index, history_hole_start)
+                            time_end.insert(hole_index, history_hole_end)
+                    if time_end[hole_index] == history_hole_start:
                         time_end.pop(hole_index)
-                        time_end.insert(hole_index, history_end_hole)
+                        time_end.insert(hole_index, history_hole_end)
+                    if (hole_index < len(time_end) - 1) and time_end[hole_index] > time_start[hole_index + 1]:
+                        print "Got history hole in between an existing hole. History start and end is ", history_hole_start, history_hole_end,
+                        print "Time start and end are", time_start, time_end
+                        raise AssertionError('Got a strange case, when history starts in between an existing hole.')
                     #Collapse holes if need be
                     if (hole_index < len(time_end) - 1) and time_end[hole_index] == time_start[hole_index + 1]:
                         time_end.pop(hole_index)
                         time_start.pop(hole_index + 1)
+                    #print "Reversed ", history_list," from time", history_time, "got time start and end", time_start, time_end
                     break
-                #Holes are never updated when tasks leave. Neither current, nor history.
-                #Therefore, they will show up as occupied.
+                    #Holes are never updated when tasks leave. Neither current, nor history.
+                    #Therefore, they will show up as occupied.
+        #print "core", core_id,"Scheduler", new_scheduler_index," placed the following -", scheduler_placement
+        while scheduler_placement:
+            hole_index = 0
+            placement = scheduler_placement.pop()
+            place_start = placement[0]
+            place_end = placement[1]
+            #The equal condition covers the case when place_start and end are exactly the placement in holes.
+            while time_end[hole_index] <= place_start:
+                hole_index += 1
+            # Check if the placement already exists
+            if time_start[hole_index] >= place_end:
+                continue
+            if time_start[hole_index] < place_start and time_end[hole_index] < place_end:
+                break
+            if time_start[hole_index] > place_start and time_end[hole_index] > place_end:
+                break
+
+            #Scheduler placements might collide. The scheduler might now know of some other
+            #scheduler's placement that collides with its own placment. In such a case,
+            #ditch proceeding further.
+            if time_start[hole_index] > place_start or place_end > time_end[hole_index]:
+                break
+            #At this point place_start and end occur inside a hole.
+            #So, time_start[hole_index] <= place_start and place_end <= time_end[hole_index]
+            start_hole = time_start[hole_index]
+            end_hole = time_end[hole_index]
+            time_start.pop(hole_index)
+            time_end.pop(hole_index)
+            if start_hole == place_start and end_hole == place_end:
+                continue
+            if start_hole < place_start:
+                time_start.insert(hole_index, start_hole)
+                time_end.insert(hole_index, place_start)
+                hole_index += 1
+            if end_hole > place_end:
+                time_start.insert(hole_index, place_end)
+                time_end.insert(hole_index, end_hole)
         return time_start, time_end
 
     # ClusterStatusKeeper class
@@ -241,7 +306,7 @@ class ClusterStatusKeeper(object):
         for core in cores:
             core_id = core.id
             time_start, time_end = self.adjust_propagation_delay(core_id, arrival_time, delay, scheduler_index)
-            #print "For core", core_id,"got holes - ", time_start, time_end
+            #print "For core", core_id,"current holes are", self.worker_queues_free_time_start[core_id], self.worker_queues_free_time_end[core_id],"adjusted holes - ", time_start, time_end, "task duration", task_duration
             if len(time_end) != len(time_start):
                 raise AssertionError('Error in get_machine_est_wait - mismatch in lengths of start and end hole arrays')
             for hole in range(len(time_end)):
@@ -263,7 +328,7 @@ class ClusterStatusKeeper(object):
                 if time_end[hole] != float('inf'):
                     # Find all possible holes at every granularity, each lasting task_duration time.
                     end = time_end[hole] - task_duration + 1
-                    end = min(end, max_time_start)
+                    end = min(end, best_current_time)
                     #time granularity of 1.
                     arr = range(start, end, 1)
                     for start_chunk in arr:
@@ -271,7 +336,7 @@ class ClusterStatusKeeper(object):
                         all_slots_list_add(start_chunk)
                         all_slots_list_cores[start_chunk].add(core_id)
                         all_slots_fragmentation[start_chunk][core_id] = max(start_chunk - start, time_end[hole] - start_chunk - task_duration)
-                        if max_time_start > start_chunk and len(all_slots_list_cores[start_chunk]) >= cpu_req:
+                        if len(all_slots_list_cores[start_chunk]) >= cpu_req and max_time_start > start_chunk:
                             max_time_start = start_chunk
                             break
                 else:
@@ -279,9 +344,10 @@ class ClusterStatusKeeper(object):
                     all_slots_list_cores[start].add(core_id)
                     all_slots_fragmentation[start][core_id] = 0
                     inf_hole_start[core_id] = start
-                    if max_time_start > start and len(all_slots_list_cores[start]) >= cpu_req:
+                    if len(all_slots_list_cores[start]) >= cpu_req and max_time_start > start:
                         max_time_start = start
                         break
+                    #print "[t=",arrival_time,"] For core ", core_id," fitting task of duration", task_duration,"into hole = ", time_start[hole], time_end[hole], "starting at", start
 
         all_slots_list = sorted(all_slots_list)
         for core, inf_start in inf_hole_start.items():
@@ -290,7 +356,7 @@ class ClusterStatusKeeper(object):
                     all_slots_list_cores[start].add(core)
                     all_slots_fragmentation[start][core] = start - inf_start
 
-        #print "Available time slots are - ", all_slots_list
+        #print "Got all possible start times", all_slots_list
         for start_time in all_slots_list:
             cores_available = len(all_slots_list_cores[start_time])
             if cores_available == cpu_req:
@@ -304,35 +370,37 @@ class ClusterStatusKeeper(object):
                     if POLICY == "WORST_FIT":
                         #Select cores with largest available hole after allocation
                         sorted_cores_fragmented = sorted(cores_fragmented.items(), key=lambda v: (v[1], random.random()), reverse=True)[0:cpu_req]
+                        #sorted_cores_fragmented = sorted(cores_fragmented.items(), key=itemgetter(1), reverse=True)[0:cpu_req]
                     elif POLICY == "BEST_FIT":
                         #Select cores with smallest available hole after allocation
                         sorted_cores_fragmented = sorted(cores_fragmented.items(), key=lambda v: (v[1], random.random()), reverse=False)[0:cpu_req]
+                        #sorted_cores_fragmented = sorted(cores_fragmented.items(), key=itemgetter(1), reverse=False)[0:cpu_req]
                     else:
                         raise AssertionError('Check the name of the policy. Should be RANDOM, WORST_FIT OR BEST_FIT')
                     cores_list = set(dict(sorted_cores_fragmented).keys())
-                #print "Earliest start time for task duration", task_duration,"needing", cpu_req,"cores is ", start_time, "with cores", cores_list 
+                #print "Earliest start time for task duration", task_duration,"needing", cpu_req,"cores is ", start_time, "with core", list(cores_list)[0]
                 # cpu_req is available when the fastest cpu_req number of cores is
                 # available for use at or after arrival_time.
                 return (start_time, cores_list)
         return (float('inf'), [])
 
-    def update_history_holes(self, worker_index, current_time, best_fit_start, best_fit_end, task_is_leaving, scheduler_index):
+    def update_history_holes(self, worker_index, current_time, best_fit_start, best_fit_end, task_is_leaving, scheduler_index, has_collision):
+        current_time = int(ceil(current_time))
         if task_is_leaving:
             best_fit_start = -1 * best_fit_start
             best_fit_end   = -1 * best_fit_end
         #print "Updating history hole - Core", worker_index,"best fit times for task that just got allocated", best_fit_start, best_fit_end, "its current holes", self.worker_queues_free_time_start[worker_index], self.worker_queues_free_time_end[worker_index], "current time",  current_time
-        self.worker_queues_history[worker_index][current_time] = [best_fit_start, best_fit_end, scheduler_index]
+        self.worker_queues_history[worker_index][current_time].append([best_fit_start, best_fit_end, scheduler_index, has_collision])
 
     def update_worker_queues_free_time(self, worker_indices, best_fit_start, best_fit_end, current_time, delay, scheduler_index):
         if best_fit_start >= best_fit_end:
             raise AssertionError('Error in update_worker_queues_free_time - best fit start larger than or equal to best fit end')
         if current_time > best_fit_start:
             raise AssertionError('Error in update_worker_queues_free_time - best fit start happened before insertion into core queues')
-
         # Cleanup stale holes
         for worker_index in worker_indices:
             while len(self.worker_queues_free_time_start[worker_index]) > 0:
-                if current_time > self.worker_queues_free_time_end[worker_index][0]:
+                if current_time - 2*UPDATE_DELAY > self.worker_queues_free_time_end[worker_index][0]:
                     #Cull this hole. No point keeping it around now.
                     self.worker_queues_free_time_start[worker_index].pop(0)
                     self.worker_queues_free_time_end[worker_index].pop(0)
@@ -340,61 +408,79 @@ class ClusterStatusKeeper(object):
                     break
             history = self.worker_queues_history[worker_index]
             for history_time in history.keys():
-                if current_time - UPDATE_DELAY > history_time:
+                if current_time - 2*UPDATE_DELAY > history_time:
                     del history[history_time]
 
+        #Ensure all workers are available at the best fit time.
+        hole_indices = {}
+        found_hole = False
         for worker_index in worker_indices:
-                #Subtract
-                found_hole = False
+            # Order : start_hole, best_fit_start, best_fit_end, end_hole
+            # Find first start just less than or equal to best_fit_start
+            for hole_index in range(len(self.worker_queues_free_time_start[worker_index])):
+                start_hole = self.worker_queues_free_time_start[worker_index][hole_index]
+                end_hole = self.worker_queues_free_time_end[worker_index][hole_index]
+                if start_hole <= best_fit_start and end_hole >= best_fit_end:
+                    hole_indices[worker_index] = hole_index
+                    break
+
+        if len(hole_indices.keys()) == len(worker_indices):
+            found_hole = True
+
+        # A real time update at worker should always find the hole.
+        if found_hole == False and not delay:
+            print "Could not find hole for worker(s)", str(worker_index), "for best fit times ", best_fit_start, best_fit_end
+            raise AssertionError('No hole was found for best fit start and end at worker(s)')
+
+        if found_hole:
+            for worker_index in worker_indices:
                 # Order : start_hole, best_fit_start, best_fit_end, end_hole
                 # Find first start just less than or equal to best_fit_start
                 #print "Core", worker_index, "holes - for best fit (",best_fit_start, best_fit_end,") is "
-                for hole_index in range(len(self.worker_queues_free_time_start[worker_index])):
-                    start_hole = self.worker_queues_free_time_start[worker_index][hole_index]
-                    end_hole = self.worker_queues_free_time_end[worker_index][hole_index]
-                    #print "(",start_hole, end_hole,")"
-                    if start_hole <= best_fit_start and end_hole >= best_fit_end:
-                        found_hole = True
-                        #print "Found hole ", start_hole, end_hole, "for serving best fit times", best_fit_start, best_fit_end
-                        self.worker_queues_free_time_start[worker_index].pop(hole_index)
-                        self.worker_queues_free_time_end[worker_index].pop(hole_index)
-                        if start_hole == best_fit_start and end_hole == best_fit_end:
-                            self.update_history_holes(worker_index, current_time, best_fit_start, best_fit_end, False, scheduler_index)
-                            break
-                        insert_position = hole_index
-                        if start_hole < best_fit_start:
-                            self.worker_queues_free_time_start[worker_index].insert(insert_position, start_hole)
-                            self.worker_queues_free_time_end[worker_index].insert(insert_position, best_fit_start)
-                            insert_position += 1
-                        if end_hole > best_fit_end:
-                            self.worker_queues_free_time_start[worker_index].insert(insert_position, best_fit_end)
-                            self.worker_queues_free_time_end[worker_index].insert(insert_position, end_hole)
-                        #print "Updated holes at Core", worker_index," is ", self.worker_queues_free_time_start[worker_index], self.worker_queues_free_time_end[worker_index]
-                        self.update_history_holes(worker_index, current_time, best_fit_start, best_fit_end, False, scheduler_index)
-                        break
-
-                # A real time update at worker should always find the hole.
-                if found_hole == False and not delay:
-                    print "Could not find hole for worker", str(worker_index), "for best fit times ", best_fit_start, best_fit_end, " its holes being", self.worker_queues_free_time_start[worker_index], self.worker_queues_free_time_end[worker_index], "and history", self.worker_queues_history[worker_index]
-                    raise AssertionError('No hole was found for best fit start and end at worker ' + str(worker_index))
-                elif found_hole == False:
-                    task_duration = best_fit_end - best_fit_start
-                    cpu_req = len(worker_indices)
-                    machine_id = simulation.workers[worker_index].machine_id
-                    current_time += NETWORK_DELAY
-                    #print "Collision detected at worker", str(worker_index), "for best fit times ", best_fit_start, best_fit_end, " its holes being", self.worker_queues_free_time_start[worker_index], self.worker_queues_free_time_end[worker_index], "and history", self.worker_queues_history[worker_index],"at current time", current_time, "at machine", machine_id, "for num cores = ", cpu_req
-                    est_time, core_list = keeper.get_machine_est_wait(simulation.machines[machine_id].cores, cpu_req, current_time, task_duration, False, float('inf'), None)
-                    #This update happens at the worker, so schedulers don't yet know about it.
-                    best_fit_start, worker_indices = keeper.update_worker_queues_free_time(core_list, est_time, est_time + task_duration, current_time, False, None)
-                    break
-
+                hole_index = hole_indices[worker_index]
+                start_hole = self.worker_queues_free_time_start[worker_index][hole_index]
+                end_hole = self.worker_queues_free_time_end[worker_index][hole_index]
+                #print "(",start_hole, end_hole,")"
+                #print "Found hole ", start_hole, end_hole, "for serving best fit times", best_fit_start, best_fit_end
+                self.worker_queues_free_time_start[worker_index].pop(hole_index)
+                self.worker_queues_free_time_end[worker_index].pop(hole_index)
+                if start_hole == best_fit_start and end_hole == best_fit_end:
+                    self.update_history_holes(worker_index, current_time, best_fit_start, best_fit_end, False, scheduler_index, False)
+                    continue
+                insert_position = hole_index
+                if start_hole < best_fit_start:
+                    self.worker_queues_free_time_start[worker_index].insert(insert_position, start_hole)
+                    self.worker_queues_free_time_end[worker_index].insert(insert_position, best_fit_start)
+                    insert_position += 1
+                if end_hole > best_fit_end:
+                    self.worker_queues_free_time_start[worker_index].insert(insert_position, best_fit_end)
+                    self.worker_queues_free_time_end[worker_index].insert(insert_position, end_hole)
+                #print "Updated holes at Core", worker_index," is ", self.worker_queues_free_time_start[worker_index], self.worker_queues_free_time_end[worker_index]
+                self.update_history_holes(worker_index, current_time, best_fit_start, best_fit_end, False, scheduler_index, False)
                 if len(self.worker_queues_free_time_start[worker_index]) != len(self.worker_queues_free_time_end[worker_index]):
                     raise AssertionError('Lengths of start and end holes are unequal')
                 if len(set(self.worker_queues_free_time_start[worker_index])) != len(self.worker_queues_free_time_start[worker_index]):
                     raise AssertionError('Duplicate entries found in start hole array')
                 if len(set(self.worker_queues_free_time_end[worker_index])) != len(self.worker_queues_free_time_end[worker_index]):
                     raise AssertionError('Duplicate entries found in end hole array')
-        return best_fit_start, worker_indices
+            return best_fit_start, worker_indices, False
+        #Some core(s) had a collision in this placement.
+        #Update the scheduler placement and proceed towards resolution.
+        for worker_index in worker_indices:
+            self.update_history_holes(worker_index, current_time, best_fit_start, best_fit_end, False, scheduler_index, True)
+
+        task_duration = best_fit_end - best_fit_start
+        cpu_req = len(worker_indices)
+        machine_id = simulation.workers[worker_index].machine_id
+        current_time += NETWORK_DELAY
+        #print "Collision detected at core", list(worker_indices)[0], "for best fit times ", best_fit_start, best_fit_end, "at current time", current_time, "at machine", machine_id, "for num cores = ", cpu_req, "new best fit start is",
+        est_time, core_list = keeper.get_machine_est_wait(simulation.machines[machine_id].cores, cpu_req, current_time, task_duration, False, float('inf'), None)
+        #This update happens at the worker, so schedulers don't yet know about it.
+        best_fit_start, worker_indices, collision = keeper.update_worker_queues_free_time(core_list, est_time, est_time + task_duration, current_time, False, None)
+        if collision != False:
+            raise AssertionError('worker resolution returned a collision!')
+        #print best_fit_start, "at cores", worker_indices
+        return best_fit_start, worker_indices, True
 
 #####################################################################################################################
 #####################################################################################################################
@@ -423,8 +509,6 @@ class TaskEndEvent(object):
         for worker_index in self.worker_indices:
             worker = simulation.workers[worker_index]
             worker.busy_time += self.task_duration
-            # Task leaving is an event registered at the worker. None of the schedulers know about it, till the worker updates.
-            keeper.update_history_holes(worker_index, current_time, int(ceil(current_time - self.task_duration)), int(ceil(current_time)), True, None)
 
             '''
             total_busyness = 0.0
@@ -774,7 +858,7 @@ class Simulation(object):
             best_fit_for_tasks.add(chosen_machine)
 
             #Update est time at this machine and its cores
-            best_fit_time, cores_at_chosen_machine = keeper.update_worker_queues_free_time(cores_at_chosen_machine, best_fit_time, best_fit_time + int(ceil(job.actual_task_duration[task_index])), current_time, delay, scheduler_index)
+            best_fit_time, cores_at_chosen_machine, has_collision = keeper.update_worker_queues_free_time(cores_at_chosen_machine, best_fit_time, best_fit_time + int(ceil(job.actual_task_duration[task_index])), current_time, delay, scheduler_index)
             probe_params = [cores_at_chosen_machine, job.id, task_index, current_time]
             self.machines[chosen_machine].add_machine_probe(best_fit_time, probe_params)
         return best_fit_for_tasks
@@ -900,8 +984,6 @@ start_time_in_dc = 0.0
 #0.5ms delay on each link.
 NETWORK_DELAY = 0.0005
 job_count = 1
-#Randomize the run.
-random.seed()
 
 if(len(sys.argv) != 11):
     print "Incorrect number of parameters."
@@ -952,5 +1034,5 @@ print >> finished_file, "Average utilization in", SYSTEM_SIMULATED, "with", TOTA
 finished_file.close()
 #load_file.close()
 # Generate CDF data
-import os; os.system("python process.py " + log_file + " " + SYSTEM_SIMULATED + " " + WORKLOAD_FILE + " " + str(TOTAL_MACHINES)); os.remove(log_file)
+import os; os.system("python process.py " + log_file + " " + SYSTEM_SIMULATED + " " + WORKLOAD_FILE + " " + str(TOTAL_MACHINES)); #os.remove(log_file)
 #os.system("python  load_murmuration.py " + load_file_name) ; os.remove(load_file_name)
