@@ -170,7 +170,7 @@ class ClusterStatusKeeper(object):
         copied = False
         time_start = (self.worker_queues_free_time_start[core_id])
         time_end = (self.worker_queues_free_time_end[core_id])
-        scheduler_placement = []
+        scheduler_placement = {}
         #Apply reversals in the reverse order, starting fron the most recent.
         for history_time, history_lists in sorted(self.worker_queues_history[core_id].items(), reverse=True):
             #Worker placements are seen after 2*Update_Delay.
@@ -186,11 +186,11 @@ class ClusterStatusKeeper(object):
                 #Placement by self scheduler is known.
                 if scheduler_index is not None and scheduler_index == new_scheduler_index:
                     #The same scheduler had placed this history placement, so it knows about it.
-                    scheduler_placement.append((history_hole_start, history_hole_end))
+                    scheduler_placement[history_hole_start] = history_hole_end
                     continue
                 #Placement by other schedulers beyond scheduler limit is also known, even if colliding.
                 if scheduler_index is not None and history_time < scheduler_time_limit:
-                    scheduler_placement.append((history_hole_start, history_hole_end))
+                    scheduler_placement[history_hole_start] = history_hole_end
                     continue
                 #Recent colliding placement by other schedulers is not seen, or recorded in worker holes.
                 #Therefore, no-op.
@@ -239,12 +239,9 @@ class ClusterStatusKeeper(object):
                     break
                     #Holes are never updated when tasks leave. Neither current, nor history.
                     #Therefore, they will show up as occupied.
-        #print "core", core_id,"Scheduler", new_scheduler_index," placed the following -", scheduler_placement
-        while scheduler_placement:
+        #print "core", core_id,"Scheduler", new_scheduler_index," sees these scheduler placements -", sorted(scheduler_placement.items())
+        for place_start, place_end in sorted(scheduler_placement.items()):
             hole_index = 0
-            placement = scheduler_placement.pop()
-            place_start = placement[0]
-            place_end = placement[1]
             #The equal condition covers the case when place_start and end are exactly the placement in holes.
             while time_end[hole_index] <= place_start:
                 hole_index += 1
@@ -252,15 +249,20 @@ class ClusterStatusKeeper(object):
             if time_start[hole_index] >= place_end:
                 continue
             if time_start[hole_index] < place_start and time_end[hole_index] < place_end:
-                break
+                print place_start, place_end,"Collision1 with current holes", time_start, time_end
+                raise AssertionError('this case of collision needs to be debugged.')
             if time_start[hole_index] > place_start and time_end[hole_index] > place_end:
-                break
+                #Case - This scheduler has placed a task that has collided with an earlier placement.
+                #Realising this, the scheduler now adjusts this placement
+                width = place_end - place_start
+                place_start = time_start[hole_index]
+                place_end = place_start + width
 
             #Scheduler placements might collide. The scheduler might now know of some other
             #scheduler's placement that collides with its own placment. In such a case,
             #ditch proceeding further.
             if time_start[hole_index] > place_start or place_end > time_end[hole_index]:
-                break
+                raise AssertionError('Got a scheduler placement in between an existing hole')
             #At this point place_start and end occur inside a hole.
             #So, time_start[hole_index] <= place_start and place_end <= time_end[hole_index]
             start_hole = time_start[hole_index]
