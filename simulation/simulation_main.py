@@ -36,6 +36,8 @@ class Job(object):
         self.estimated_task_duration = mean_task_duration
         self.remaining_exec_time = self.estimated_task_duration*len(self.unscheduled_tasks)
 
+        self.num_collisions = 0
+
     #Job class
     """ Returns true if the job has completed, and false otherwise. """
     def update_task_completion_details(self, completion_time):
@@ -503,6 +505,7 @@ class TaskEndEvent(object):
             # Task's total time = Scheduler queue time (=0) + Scheduler Algorithm time + Machine queue wait time + Task processing time
             try:
                 print >> finished_file, current_time," estimated_task_duration: ",job.estimated_task_duration, " total_job_running_time: ",(job.end_time - job.start_time), " job_id", job.id, " scheduler_algorithm_time ", 0.0, " task_wait_time ", self.task_wait_time, " task_processing_time ", self.task_duration
+                print >> job_load_file, job.id, job.num_collisions
             except IOError, e:
                 print "Failed writing to output file due to ", e
 
@@ -568,6 +571,8 @@ class Machine(object):
         self.queued_probes = PriorityQueue()
 
         self.num_tasks_processed = 0
+
+        self.num_collisions = 0
 
     #Machine class
     def add_machine_probe(self, best_fit_time, probe_params):
@@ -827,6 +832,7 @@ class Simulation(object):
     # TODO: Other strategies - bulk allocation using well-fit, not best fit for tasks
     # Hole filling strategies, etc
     def find_machines_murmuration(self, job, current_time, scheduler_index):
+        global num_collisions
         if job.num_tasks != len(job.cpu_reqs_by_tasks):
             raise AssertionError('Number of tasks provided not equal to length of cpu_reqs_by_tasks list')
         # best_fit_for_tasks = (ma, mb, .... )
@@ -863,6 +869,10 @@ class Simulation(object):
             best_fit_time, cores_at_chosen_machine, has_collision = keeper.update_worker_queues_free_time(cores_at_chosen_machine, best_fit_time, best_fit_time + int(ceil(job.actual_task_duration[task_index])), current_time, delay, scheduler_index)
             probe_params = [cores_at_chosen_machine, job.id, task_index, current_time]
             self.machines[chosen_machine].add_machine_probe(best_fit_time, probe_params)
+            if has_collision:
+                self.machines[chosen_machine].num_collisions += 1
+                job.num_collisions += 1
+                num_collisions += 1
         return best_fit_for_tasks
 
     #Simulation class
@@ -961,6 +971,8 @@ class Simulation(object):
 
         #for machine in self.machines:
         #    print >> load_file, machine.id, machine.num_tasks_processed
+        for machine in self.machines:
+            print >> machine_load_file, machine.id, machine.num_collisions
         #Free up all memory
         del self.machines[:]
         del self.scheduler_indices[:]
@@ -986,6 +998,7 @@ start_time_in_dc = 0.0
 #0.5ms delay on each link.
 NETWORK_DELAY = 0.0005
 job_count = 1
+num_collisions = 0
 
 if(len(sys.argv) != 11):
     print "Incorrect number of parameters."
@@ -1020,6 +1033,15 @@ finished_file   = open(log_file, 'w')
 #load_file_name = separator.join(file_name)
 #load_file = open(load_file_name,'w')
 
+file_name = ['finished_file', sys.argv[2], sys.argv[4], sys.argv[6], sys.argv[7], sys.argv[9],sys.argv[10], 'machine', 'collisions']
+mc_load_file_name = separator.join(file_name)
+machine_load_file = open(mc_load_file_name,'w')
+
+file_name = ['finished_file', sys.argv[2], sys.argv[4], sys.argv[6], sys.argv[7], sys.argv[9],sys.argv[10], 'job', 'collisions']
+job_load_file_name = separator.join(file_name)
+job_load_file = open(job_load_file_name,'w')
+
+random.seed(123456789)
 
 t1 = time()
 simulation = Simulation(WORKLOAD_FILE, TOTAL_MACHINES)
@@ -1029,12 +1051,15 @@ simulation.run()
 
 simulation_time = (time() - t1)
 print "Simulation ended in ", simulation_time, " s "
-print "Average utilization in", SYSTEM_SIMULATED, "with", TOTAL_MACHINES,"machines and",num_workers, "total workers", POLICY, "hole fitting policy and", sys.argv[7],"system is", utilization, "(simulation time:", simulation_time," total DC time:",time_elapsed_in_dc, ")", "total busyness", total_busyness, "update delay is", UPDATE_DELAY, "scheduler:cores ratio", RATIO_SCHEDULERS_TO_WORKERS
-print >> finished_file, "Average utilization in", SYSTEM_SIMULATED, "with", TOTAL_MACHINES,"machines and",num_workers, "total workers", POLICY, "hole fitting policy and", sys.argv[7],"system is", utilization, "(simulation time:", simulation_time," total DC time:",time_elapsed_in_dc, ")", "total busyness", total_busyness, "update delay is", UPDATE_DELAY, "scheduler:cores ratio", RATIO_SCHEDULERS_TO_WORKERS
+print "Average utilization in", SYSTEM_SIMULATED, "with", TOTAL_MACHINES,"machines and",num_workers, "total workers", POLICY, "hole fitting policy and", sys.argv[7],"system is", utilization, "(simulation time:", simulation_time," total DC time:",time_elapsed_in_dc, ")", "total busyness", total_busyness, "update delay is", UPDATE_DELAY, "scheduler:cores ratio", RATIO_SCHEDULERS_TO_WORKERS, "total collisions", num_collisions
+print >> finished_file, "Average utilization in", SYSTEM_SIMULATED, "with", TOTAL_MACHINES,"machines and",num_workers, "total workers", POLICY, "hole fitting policy and", sys.argv[7],"system is", utilization, "(simulation time:", simulation_time," total DC time:",time_elapsed_in_dc, ")", "total busyness", total_busyness, "update delay is", UPDATE_DELAY, "scheduler:cores ratio", RATIO_SCHEDULERS_TO_WORKERS, "total collisions", num_collisions
 
 
 finished_file.close()
 #load_file.close()
+machine_load_file.close()
+job_load_file.close()
 # Generate CDF data
 import os; os.system("python process.py " + log_file + " " + SYSTEM_SIMULATED + " " + WORKLOAD_FILE + " " + str(TOTAL_MACHINES)); #os.remove(log_file)
-#os.system("python  load_murmuration.py " + load_file_name) ; os.remove(load_file_name)
+#os.system("python  load_murmuration.py " + mc_load_file_name) ; #os.remove(load_file_name)
+#os.system("python  load_murmuration.py " + job_load_file_name) ; #os.remove(load_file_name)
