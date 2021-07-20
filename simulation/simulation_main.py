@@ -250,21 +250,14 @@ class ClusterStatusKeeper(object):
             # Check if the placement already exists
             if time_start[hole_index] >= place_end:
                 continue
-            if time_start[hole_index] < place_start and time_end[hole_index] < place_end:
-                print place_start, place_end,"Collision1 with current holes", time_start, time_end
-                raise AssertionError('this case of collision needs to be debugged.')
-            if time_start[hole_index] > place_start and time_end[hole_index] > place_end:
+            if not(time_start[hole_index] <= place_start and place_end <= time_end[hole_index]):
                 #Case - This scheduler has placed a task that has collided with an earlier placement.
                 #Realising this, the scheduler now adjusts this placement
                 width = place_end - place_start
+                hole_index = len(time_start) -1
                 place_start = time_start[hole_index]
                 place_end = place_start + width
 
-            #Scheduler placements might collide. The scheduler might now know of some other
-            #scheduler's placement that collides with its own placment. In such a case,
-            #ditch proceeding further.
-            if time_start[hole_index] > place_start or place_end > time_end[hole_index]:
-                raise AssertionError('Got a scheduler placement in between an existing hole')
             #At this point place_start and end occur inside a hole.
             #So, time_start[hole_index] <= place_start and place_end <= time_end[hole_index]
             start_hole = time_start[hole_index]
