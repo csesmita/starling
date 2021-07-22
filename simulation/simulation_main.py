@@ -390,6 +390,7 @@ class ClusterStatusKeeper(object):
         self.worker_queues_history[worker_index][current_time].append([best_fit_start, best_fit_end, scheduler_index, has_collision])
 
     def update_worker_queues_free_time(self, worker_indices, best_fit_start, best_fit_end, current_time, delay, scheduler_index):
+        global per_scheduler_collision
         if best_fit_start >= best_fit_end:
             raise AssertionError('Error in update_worker_queues_free_time - best fit start larger than or equal to best fit end')
         if current_time > best_fit_start:
@@ -470,6 +471,7 @@ class ClusterStatusKeeper(object):
         cpu_req = len(worker_indices)
         machine_id = simulation.workers[worker_index].machine_id
         current_time += NETWORK_DELAY
+        per_scheduler_collision[scheduler_index] += 1
         #print "Collision detected at core", list(worker_indices)[0], "for best fit times ", best_fit_start, best_fit_end, "at current time", current_time, "at machine", machine_id, "for num cores = ", cpu_req, "new best fit start is",
         est_time, core_list = keeper.get_machine_est_wait(simulation.machines[machine_id].cores, cpu_req, current_time, task_duration, False, float('inf'), None)
         #This update happens at the worker, so schedulers don't yet know about it.
@@ -507,6 +509,8 @@ class TaskEndEvent(object):
         for worker_index in self.worker_indices:
             worker = simulation.workers[worker_index]
             worker.busy_time += self.task_duration
+            worker_machine = simulation.machines[worker.machine_id]
+            worker_machine.task_wait_times += self.task_wait_time
 
             '''
             total_busyness = 0.0
@@ -564,8 +568,10 @@ class Machine(object):
         self.queued_probes = PriorityQueue()
 
         self.num_tasks_processed = 0
+        self.task_duration_processed = 0
 
         self.num_collisions = 0
+        self.task_wait_times = 0.0
 
     #Machine class
     def add_machine_probe(self, best_fit_time, probe_params):
@@ -826,9 +832,11 @@ class Simulation(object):
     # Hole filling strategies, etc
     def find_machines_murmuration(self, job, current_time, scheduler_index):
         global num_collisions
+        global per_scheduler_placement
         if job.num_tasks != len(job.cpu_reqs_by_tasks):
             raise AssertionError('Number of tasks provided not equal to length of cpu_reqs_by_tasks list')
         # best_fit_for_tasks = (ma, mb, .... )
+        per_scheduler_placement[scheduler_index] += job.num_tasks
         best_fit_for_tasks = set()
         machines = self.machines
         delay = True if DECENTRALIZED else False
@@ -912,6 +920,7 @@ class Simulation(object):
         # Returns a set of machines to service tasks of the job - (m1, m2, ...).
         # May be less than the number of tasks due to same machines hosting more than one task.
         machine_indices = self.find_machines_murmuration(job, current_time, scheduler_index)
+        #print current_time, "Scheduler", scheduler_index," selected machines", machine_indices,"for job", job.id
         # Return task arrival events for long jobs
         for machine_id in machine_indices:
             task_arrival_events.append((current_time, ProbeEventForMachines(self.machines[machine_id])))
@@ -924,6 +933,7 @@ class Simulation(object):
 
         #Collect load statistics
         machine.num_tasks_processed += 1
+        machine.task_duration_processed += task_duration
 
         events = []
         job.unscheduled_tasks.remove(task_duration)
@@ -962,8 +972,8 @@ class Simulation(object):
             for new_event in new_events:
                 self.event_queue.put(new_event)
 
-        #for machine in self.machines:
-        #    print >> load_file, machine.id, machine.num_tasks_processed
+        for machine in self.machines:
+            print >> load_file, machine.id, machine.num_tasks_processed, machine.task_duration_processed, machine.task_wait_times
         for machine in self.machines:
             print >> machine_load_file, machine.id, machine.num_collisions
         #Free up all memory
@@ -992,6 +1002,9 @@ start_time_in_dc = 0.0
 NETWORK_DELAY = 0.0005
 job_count = 1
 num_collisions = 0
+
+per_scheduler_collision = defaultdict(int)
+per_scheduler_placement = defaultdict(int)
 
 if(len(sys.argv) != 11):
     print "Incorrect number of parameters."
@@ -1022,9 +1035,9 @@ separator = '_'
 log_file = (separator.join(file_name))
 finished_file   = open(log_file, 'w')
 
-#file_name = ['finished_file', sys.argv[2], sys.argv[4], sys.argv[5], sys.argv[6], sys.argv[7], sys.argv[9],sys.argv[10], 'load']
-#load_file_name = separator.join(file_name)
-#load_file = open(load_file_name,'w')
+file_name = ['finished_file', sys.argv[2], sys.argv[4], sys.argv[5], sys.argv[6], sys.argv[7], sys.argv[9],sys.argv[10], 'load']
+load_file_name = separator.join(file_name)
+load_file = open(load_file_name,'w')
 
 file_name = ['finished_file', sys.argv[2], sys.argv[4], sys.argv[6], sys.argv[7], sys.argv[9],sys.argv[10], 'machine', 'collisions']
 mc_load_file_name = separator.join(file_name)
@@ -1047,12 +1060,15 @@ print "Simulation ended in ", simulation_time, " s "
 print "Average utilization in", SYSTEM_SIMULATED, "with", TOTAL_MACHINES,"machines and",num_workers, "total workers", POLICY, "hole fitting policy and", sys.argv[7],"system is", utilization, "(simulation time:", simulation_time," total DC time:",time_elapsed_in_dc, ")", "total busyness", total_busyness, "update delay is", UPDATE_DELAY, "scheduler:cores ratio", RATIO_SCHEDULERS_TO_WORKERS, "total collisions", num_collisions
 print >> finished_file, "Average utilization in", SYSTEM_SIMULATED, "with", TOTAL_MACHINES,"machines and",num_workers, "total workers", POLICY, "hole fitting policy and", sys.argv[7],"system is", utilization, "(simulation time:", simulation_time," total DC time:",time_elapsed_in_dc, ")", "total busyness", total_busyness, "update delay is", UPDATE_DELAY, "scheduler:cores ratio", RATIO_SCHEDULERS_TO_WORKERS, "total collisions", num_collisions
 
+for scheduler_index in per_scheduler_placement.keys():
+    print "Scheduler", scheduler_index,"has a collision ratio", float(per_scheduler_collision[scheduler_index]) / float(per_scheduler_placement[scheduler_index])
 
 finished_file.close()
-#load_file.close()
+load_file.close()
 machine_load_file.close()
 job_load_file.close()
 # Generate CDF data
 import os; os.system("python process.py " + log_file + " " + SYSTEM_SIMULATED + " " + WORKLOAD_FILE + " " + str(TOTAL_MACHINES)); #os.remove(log_file)
-#os.system("python  load_murmuration.py " + mc_load_file_name) ; #os.remove(load_file_name)
+#os.system("python  load_murmuration.py " + load_file_name) ; #os.remove(load_file_name)
+#os.system("python  load_murmuration.py " + job_load_file_name) ; #os.remove(load_file_name)
 #os.system("python  load_murmuration.py " + job_load_file_name) ; #os.remove(load_file_name)
