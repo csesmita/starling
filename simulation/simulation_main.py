@@ -129,6 +129,10 @@ class ClusterStatusKeeper(object):
         for i in scheduler_indices:
            self.scheduler_view[i] = defaultdict(tuple)
 
+    def initialize_worker_queues(self, num_workers, start_time):
+       for i in range(0, num_workers):
+           self.worker_queues_free_time[i] = start_time
+
     def print_holes(self, worker_index):
         print "Actual hole starts from", self.worker_queues_free_time[worker_index]
 
@@ -169,10 +173,10 @@ class ClusterStatusKeeper(object):
         return (earliest_available_time, selected_core_id)
 
     def update_history_holes(self, worker_index, current_time, duration, scheduler_index):
-        current_time = int(ceil(current_time))
         self.worker_queues_history[worker_index][current_time].append((scheduler_index, duration))
 
     def update_worker_queues_free_time(self, worker_index, start_time, end_time, current_time, scheduler_index):
+        current_time = int(ceil(current_time))
         history = self.worker_queues_history[worker_index]
         for history_time in history.keys():
             if current_time - UPDATE_DELAY > history_time:
@@ -183,21 +187,26 @@ class ClusterStatusKeeper(object):
 
         duration = end_time - start_time
 
+        #Update the actual worker's queue.
+        actual_start_at_worker = self.worker_queues_free_time[worker_index] if self.worker_queues_free_time[worker_index] > current_time else current_time
+        has_collision = False
+        if actual_start_at_worker < start_time:
+            raise AssertionError('debug case of earlier start')
+        if start_time == actual_start_at_worker:
+            self.worker_queues_free_time[worker_index] = actual_start_at_worker + duration
+        else:
+            has_collision =True
+            start_time = actual_start_at_worker
+            self.worker_queues_free_time[worker_index] = actual_start_at_worker + duration
+
         #Update this scheduler's own view.
         availability_at_cores = self.scheduler_view[scheduler_index]
         others_updated_time, core_availability = availability_at_cores[worker_index] 
-        core_availability += duration
+        core_availability = actual_start_at_worker + duration
         availability_at_cores[worker_index] = (others_updated_time, core_availability)
         self.scheduler_view[scheduler_index] = availability_at_cores
 
-        #Update the actual worker's queue.
-        if start_time == self.worker_queues_free_time[worker_index]:
-            self.worker_queues_free_time[worker_index] = end_time
-            return start_time, False
-       
-        start_time = self.worker_queues_free_time[worker_index]
-        self.worker_queues_free_time[worker_index] += duration
-        return start_time, True
+        return start_time, has_collision
 
 #####################################################################################################################
 #####################################################################################################################
@@ -296,8 +305,8 @@ class Simulation(object):
     # TODO: Other strategies - bulk allocation using well-fit, not best fit for tasks
     # Hole filling strategies, etc
     def find_machines_murmuration(self, job, current_time, scheduler_index):
-        global start_time_in_dc
         global time_elapsed_in_dc
+        global num_collisions
         # best_fit_for_tasks = (ma, mb, .... )
         best_fit_for_tasks = set()
         best_fit_for_tasks_central = set()
@@ -313,7 +322,7 @@ class Simulation(object):
             while 1:
                 if not machines_not_yet_processed:
                     break
-                machine_id = random.choice(machines_not_yet_processed)
+                machine_id = machines_not_yet_processed[0]
                 machines_not_yet_processed.remove(machine_id)
                 est_time, core_list = keeper.get_machine_est_wait(self.machines[machine_id].cores, current_time, best_fit_time, scheduler_index)
                 if est_time < best_fit_time:
@@ -327,12 +336,13 @@ class Simulation(object):
                 raise AssertionError('Error - Got best fit time that is infinite!')
             best_fit_for_tasks.add(chosen_machine)
             #Update est time at this machine and its cores
-            #print "Picked machine", chosen_machine," for job", job.id,"task", task_index, "with best fit scheduler view", best_fit_time,
+            #print "Picked machine", chosen_machine," for job", job.id,"task", task_index, "duration", duration,"with best fit scheduler view", best_fit_time,
             best_fit_time, has_collision = keeper.update_worker_queues_free_time(core_at_chosen_machine, best_fit_time, best_fit_time + int(ceil(duration)), current_time, scheduler_index)
             simulation.workers[core_at_chosen_machine].busy_time += duration
-            #print "Adjusted after collision to", best_fit_time
             job.should_finish_time = max(job.should_finish_time, best_fit_time + int(ceil(duration)))
-        time_elapsed_in_dc = job.should_finish_time - start_time_in_dc
+            if has_collision:
+                num_collisions += 1
+        time_elapsed_in_dc = max(time_elapsed_in_dc, job.should_finish_time)
         print >> finished_file, job.should_finish_time, " total_job_running_time: ",(job.should_finish_time - job.start_time), " job_id", job.id
         self.jobs_completed += 1
         return []
@@ -392,6 +402,7 @@ class Simulation(object):
         line = self.jobs_file.readline()
         start_time_in_dc = float(line.split()[0])
 
+        keeper.initialize_worker_queues(len(simulation.workers), int(ceil(start_time_in_dc)))
         new_job = Job(line)
         self.event_queue.put((float(line.split()[0]), JobArrival(new_job, self.jobs_file)))
         self.jobs_scheduled = 1
@@ -419,7 +430,7 @@ class Simulation(object):
         self.jobs_file.close()
 
         # Calculate utilizations of worker machines in DC
-        #time_elapsed_in_dc = current_time - start_time_in_dc
+        time_elapsed_in_dc -= start_time_in_dc
         print "Total time elapsed in the DC is", time_elapsed_in_dc, "s"
         utilization = 100 * (float(total_busyness) / float(time_elapsed_in_dc * num_workers))
 
@@ -429,6 +440,7 @@ utilization = 0.0
 time_elapsed_in_dc = 0.0
 total_busyness = 0.0
 start_time_in_dc = 0.0
+num_collisions = 0
 
 #0.5ms delay on each link.
 NETWORK_DELAY = 0.0005
@@ -476,8 +488,8 @@ simulation.run()
 
 simulation_time = (time() - t1)
 print "Simulation ended in ", simulation_time, " s "
-print "Average utilization in", SYSTEM_SIMULATED, "with", TOTAL_MACHINES,"machines and",num_workers, "total workers", POLICY, "hole fitting policy and", sys.argv[7],"system is", utilization, "(simulation time:", simulation_time," total DC time:",time_elapsed_in_dc, ")", "total busyness", total_busyness, "update delay is", UPDATE_DELAY, "scheduler:cores ratio", RATIO_SCHEDULERS_TO_WORKERS
-print >> finished_file, "Average utilization in", SYSTEM_SIMULATED, "with", TOTAL_MACHINES,"machines and",num_workers, "total workers", POLICY, "hole fitting policy and", sys.argv[7],"system is", utilization, "(simulation time:", simulation_time," total DC time:",time_elapsed_in_dc, ")", "total busyness", total_busyness, "update delay is", UPDATE_DELAY, "scheduler:cores ratio", RATIO_SCHEDULERS_TO_WORKERS
+print "Average utilization in", SYSTEM_SIMULATED, "with", TOTAL_MACHINES,"machines and",num_workers, "total workers", POLICY, "hole fitting policy and", sys.argv[7],"system is", utilization, "(simulation time:", simulation_time," total DC time:",time_elapsed_in_dc, ")", "total busyness", total_busyness, "update delay is", UPDATE_DELAY, "scheduler:cores ratio", RATIO_SCHEDULERS_TO_WORKERS, "total collisions", num_collisions
+print >> finished_file, "Average utilization in", SYSTEM_SIMULATED, "with", TOTAL_MACHINES,"machines and",num_workers, "total workers", POLICY, "hole fitting policy and", sys.argv[7],"system is", utilization, "(simulation time:", simulation_time," total DC time:",time_elapsed_in_dc, ")", "total busyness", total_busyness, "update delay is", UPDATE_DELAY, "scheduler:cores ratio", RATIO_SCHEDULERS_TO_WORKERS,"total collisions", num_collisions
 
 finished_file.close()
 # Generate CDF data
