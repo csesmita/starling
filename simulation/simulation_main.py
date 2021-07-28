@@ -496,4 +496,4 @@ print >> finished_file, "(Single Core) Average utilization in", SYSTEM_SIMULATED
 
 finished_file.close()
 # Generate CDF data
-#import os; os.system("python process.py " + log_file + " " + SYSTEM_SIMULATED + " " + WORKLOAD_FILE + " " + str(TOTAL_MACHINES)); #os.remove(log_file)
+import os; os.system("python process.py " + log_file + " " + SYSTEM_SIMULATED + " " + WORKLOAD_FILE + " " + str(TOTAL_MACHINES)); os.remove(log_file)
