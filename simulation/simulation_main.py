@@ -93,7 +93,7 @@ class JobArrival(Event, file):
             # Sparrow
             if self.job.id % 100 == 0:
                 print current_time, ":   Job arrived!!", self.job.id, " num tasks ", self.job.num_tasks, " estimated_duration ", self.job.estimated_task_duration, "simulation time", time() - t1
-            worker_indices = simulation.find_machines_random(PROBE_RATIO, self.job.num_tasks, set(range(TOTAL_MACHINES)), self.job.cpu_reqs_by_tasks)
+            worker_indices = simulation.find_machines_random(PROBE_RATIO, self.job.num_tasks, range(TOTAL_MACHINES))
 
         new_events = simulation.send_probes(self.job, current_time, worker_indices)
 
@@ -107,6 +107,17 @@ class JobArrival(Event, file):
         simulation.jobs_scheduled += 1
 
         return new_events
+
+#####################################################################################################################
+#####################################################################################################################
+# Support for multi-core task request
+class ProbeEventForMachines(Event):
+    def __init__(self, machine):
+        self.machine = machine
+
+    def run(self, current_time):
+        return self.machine.try_process_next_probe_murmuration(current_time)
+
 
 #####################################################################################################################
 #####################################################################################################################
@@ -215,6 +226,44 @@ class ClusterStatusKeeper(object):
 
 #####################################################################################################################
 #####################################################################################################################
+class TaskEndEvent(object):
+    def __init__(self, worker_index, task_duration, job_id, task_wait_time):
+        self.worker_index = worker_index
+        self.task_duration = task_duration
+        self.job_id = job_id
+        self.task_wait_time = task_wait_time
+
+    def run(self, current_time):
+        job = simulation.jobs[self.job_id]
+        is_job_complete = job.update_task_completion_details(current_time)
+
+        if is_job_complete:
+            simulation.jobs_completed += 1
+            # Task's total time = Scheduler queue time (=0) + Scheduler Algorithm time(=0) + Machine queue wait time + Task processing time
+            try:
+                print >> finished_file, current_time,"total_job_running_time:",(job.end_time - job.start_time), "job_id", job.id
+            except IOError, e:
+                print "Failed writing to output file due to ", e
+
+
+        events = []
+        worker = simulation.workers[self.worker_index]
+        worker.busy_time += self.task_duration
+
+        new_events = worker.free_slot(current_time)
+        for new_event in new_events:
+            events.append(new_event)
+
+        if is_job_complete:
+            del job.unscheduled_tasks
+            del job.actual_task_duration
+            del simulation.jobs[job.id]
+
+        return events
+
+
+#####################################################################################################################
+#####################################################################################################################
 # Support for multi-core machines in Murmuration
 # Core = Worker class
 class Machine(object):
@@ -245,6 +294,165 @@ class Machine(object):
         #Enqueued tasks at this machine
         self.queued_probes = PriorityQueue()
 
+    #Machine class
+    def add_machine_probe(self, best_fit_time, probe_params):
+        self.queued_probes.put((best_fit_time, probe_params))
+
+    #Machine class
+    def free_machine_core(self, core, current_time):
+        self.free_cores[core.id] = current_time
+        return self.try_process_next_probe_murmuration(current_time)
+
+    #Machine class
+    #Assumes best fit time is always unique across tasks on the same (machine, cores).
+    #Pop best fitting tasks across different cores.
+    #Check which has the fastest completion time and process that task.
+    #Re-insert the rest of the tasks back into machine queue.
+    #This ensures TaskEndEvents, and hence DC time, are monotonically increasing functions.
+    def try_process_next_probe_murmuration(self, current_time):
+        if SYSTEM_SIMULATED == "Sparrow":
+            return self.try_process_next_probe_sparrow(current_time)
+        events = []
+        #Candidates list among all possible tasks that can execute with current free cores.
+        earliest_task_completion_time = float('inf')
+        candidate_best_fit_time = 0.0
+        candidate_processing_time = 0.0
+        candidate_task_info = None
+        candidate_cores = {}
+        candidate_probes_covered = PriorityQueue()
+        while 1:
+            if self.queued_probes.empty() or len(self.free_cores) == 0:
+                #Nothing to execute, or nowhere to execute
+                break
+            #print current_time, ":This iteration free cores are ", self.free_cores.keys()
+            #First of the queued tasks in this iteration
+            best_fit_time, task_info = self.queued_probes.get()
+            # Extract all information
+            core_id = task_info[0]
+            job_id = task_info[1]
+            job = simulation.jobs[job_id]
+            if len(job.unscheduled_tasks) <= 0:
+                raise AssertionError('No redundant probes in Murmuration, yet tasks have finished?')
+            task_index = task_info[2]
+            probe_arrival_time = task_info[3]
+            if core_id not in self.free_cores.keys():
+                #Wait for the next event to trigger this task processing
+                candidate_probes_covered.put((best_fit_time, task_info))
+                #Note these cores, they are not ready to execute yet, but important to clear free_cores list.
+                #print "Best fit time", best_fit_time, "Task info", task_info, "reason - cores not yet free"
+                continue
+
+            core_available_time = self.free_cores[core_id]
+            candidate_cores[core_id] = core_available_time
+            del self.free_cores[core_id]
+
+            # Take the larger of the probe arrival time and core free time to determine when the task starts executing.
+            # Best fit is just a time estimate, for task completion use the exact start times and durations.
+            # So, processing time might be less than the current time, even though task completion will be after current time.
+            processing_start_time = core_available_time if core_available_time > probe_arrival_time else probe_arrival_time
+            task_actual_duration = job.actual_task_duration[task_index]
+            task_completion_time = processing_start_time + task_actual_duration
+            if task_completion_time < earliest_task_completion_time:
+                #Replace our previous best candidate.
+                if earliest_task_completion_time != float('inf'):
+                    candidate_probes_covered.put((candidate_best_fit_time, candidate_task_info))
+                    #print "Best fit time", candidate_best_fit_time, "Task info", candidate_task_info, "reason - got a task with earlier finish"
+                earliest_task_completion_time = task_completion_time
+                candidate_best_fit_time = best_fit_time
+                candidate_task_info = task_info
+                candidate_processing_time = processing_start_time
+                #print current_time,": Got candidate best fit time", candidate_best_fit_time, "Task info", task_info, "Cores", core_id, "due to finish at ", earliest_task_completion_time
+            else:
+                #Not our best candidate
+                candidate_probes_covered.put((best_fit_time, task_info))
+                #print "Best fit time", best_fit_time, "Task info", task_info, "reason - not the best candidate"
+
+        if earliest_task_completion_time == float('inf'):
+            #Reinsert all free cores
+            for core_index in candidate_cores.keys():
+                self.free_cores[core_index] = candidate_cores[core_index]
+            #Reinsert all queued probes that were inspected
+            while not candidate_probes_covered.empty():
+                best_fit_time, task_info = candidate_probes_covered.get()
+                self.queued_probes.put((best_fit_time, task_info))
+            return []
+
+        # Extract all information
+        core_id = candidate_task_info[0]
+        job_id = candidate_task_info[1]
+        job = simulation.jobs[job_id]
+        if len(job.unscheduled_tasks) <= 0:
+            raise AssertionError('No redundant probes in Murmuration, yet tasks have finished?')
+        task_index = candidate_task_info[2]
+        probe_arrival_time = candidate_task_info[3]
+
+        task_actual_duration = job.actual_task_duration[task_index]
+        #print current_time,": Got candidate best fit time", candidate_best_fit_time, "Task duration", task_actual_duration, "Cores", core_id, "due to finish at ", earliest_task_completion_time
+
+        if earliest_task_completion_time < current_time:
+            print current_time,": Got candidate best fit time", candidate_best_fit_time, "Task duration", task_actual_duration, "Cores", core_id, "due to finish at ", earliest_task_completion_time
+            raise AssertionError('Unprocessed task with completion time before current time.')
+
+        #Reinsert all free cores other than the ones needed
+        for core_index in candidate_cores.keys():
+            if core_index != core_id:
+                self.free_cores[core_index] = candidate_cores[core_index]
+
+        #Reinsert all queued probes that were inspected
+        while not candidate_probes_covered.empty():
+            best_fit_time, task_info = candidate_probes_covered.get()
+            self.queued_probes.put((best_fit_time, task_info))
+
+        # Finally, process the current task with all these parameters
+        #print "Picked machine", self.id," for job", job_id,"task", task_index, "duration", task_actual_duration,"with best fit scheduler view", candidate_processing_time
+        new_events = simulation.process_machine_task(self, core_id, job_id, task_index, task_actual_duration, candidate_processing_time, probe_arrival_time)
+        for new_event in new_events:
+            events.append(new_event)
+
+        return events
+
+
+    # Machine class
+    def try_process_next_probe_sparrow(self, current_time):
+        events = []
+        while 1:
+            if self.queued_probes.empty() or len(self.free_cores) == 0:
+                #Nothing to execute, or nowhere to execute
+                break
+
+            #First of the queued tasks
+            time, task_info = self.queued_probes.get()
+
+            # Extract all information
+            job_id = task_info[1]
+            if not job_id in simulation.jobs.keys():
+                continue
+            job = simulation.jobs[job_id]
+            task_index = task_info[2]
+            probe_arrival_time = task_info[3]
+            task_actual_duration = job.actual_task_duration[task_index]
+
+            # Remove redundant probes for this task without accounting for them in response time.
+            if task_actual_duration not in simulation.jobs[job_id].unscheduled_tasks:
+                continue
+
+            core_id = self.free_cores.keys()[0]
+            del self.free_cores[core_id]
+
+            # Note - Current time is the start of the processing time. This is because -
+            # 1. The probe has already arrived before now.
+            # 2. The cores have been freed before now.
+            # 3. There might have been redundant probes because of which this task was
+            #    still enqueued till now despite cores available.
+
+            # Finally, process the current task with all these parameters
+            new_events = simulation.process_machine_task(self, core_id, job_id, task_index, task_actual_duration, current_time, probe_arrival_time)
+            for new_event in new_events:
+                events.append(new_event)
+            break
+
+        return events
+
 #####################################################################################################################
 #####################################################################################################################
 # This class denotes a single core on a machine.
@@ -254,6 +462,13 @@ class Worker(object):
         self.machine_id = machine_id
         # Parameter to measure how long this worker is busy in the total run.
         self.busy_time = 0.0
+
+    #Worker class
+    # In Murmuration, free_slot will report the same to the machine class.
+    def free_slot(self, current_time):
+        machine = simulation.machines[self.machine_id]
+        return machine.free_machine_core(self, current_time)
+
 #####################################################################################################################
 #####################################################################################################################
 
@@ -342,14 +557,11 @@ class Simulation(object):
             #Update est time at this machine and its cores
             #print "Picked machine", chosen_machine," for job", job.id,"task", task_index, "duration", duration,"with best fit scheduler view", best_fit_time,
             best_fit_time, has_collision = keeper.update_worker_queues_free_time(core_at_chosen_machine, best_fit_time, best_fit_time + int(ceil(duration)), current_time, scheduler_index)
-            simulation.workers[core_at_chosen_machine].busy_time += duration
-            job.should_finish_time = max(job.should_finish_time, best_fit_time + int(ceil(duration)))
+            probe_params = [core_at_chosen_machine, job.id, task_index, current_time]
+            self.machines[chosen_machine].add_machine_probe(best_fit_time, probe_params)
             if has_collision:
                 num_collisions += 1
-        time_elapsed_in_dc = max(time_elapsed_in_dc, job.should_finish_time)
-        print >> finished_file, job.should_finish_time, " total_job_running_time: ",(job.should_finish_time - job.start_time), " job_id", job.id
-        self.jobs_completed += 1
-        return []
+        return best_fit_for_tasks
 
     #Simulation class
     def send_probes(self, job, current_time, worker_indices):
@@ -379,6 +591,7 @@ class Simulation(object):
     # Simulation class
     def send_tasks_murmuration(self, job, current_time, scheduler_indices):
         self.jobs[job.id] = job
+        task_arrival_events = []
         # Some safety checks
         if len(scheduler_indices) != 1:
             raise AssertionError('Murmuration received more than one scheduler for the job?')
@@ -391,8 +604,26 @@ class Simulation(object):
         # Find machines for tasks and trigger events.
         # Returns a set of machines to service tasks of the job - (m1, m2, ...).
         # May be less than the number of tasks due to same machines hosting more than one task.
-        self.find_machines_murmuration(job, current_time, scheduler_index)
-        return []
+        machine_indices = self.find_machines_murmuration(job, current_time, scheduler_index)
+        for machine_id in machine_indices:
+            task_arrival_events.append((current_time, ProbeEventForMachines(self.machines[machine_id])))
+        return task_arrival_events
+
+    #Simulation class
+    def process_machine_task(self, machine, core_id, job_id, task_index, task_duration, current_time, probe_arrival_time):
+        job = self.jobs[job_id]
+        task_wait_time = current_time - probe_arrival_time
+
+        events = []
+        job.unscheduled_tasks.remove(task_duration)
+        task_completion_time = task_duration + current_time
+        if SYSTEM_SIMULATED == "Sparrow":
+            #Account for time for the probe to get task data and details.
+            task_completion_time += 2 * NETWORK_DELAY
+        #print "Job id", job_id, current_time, " machine ", machine.id, "cores ",core_id, " job id ", job_id, " task index: ", task_index," task duration: ", task_duration, " arrived at ", probe_arrival_time, "and will finish at time ", task_completion_time
+
+        events.append((task_completion_time, TaskEndEvent(core_id, task_duration, job_id, task_wait_time)))
+        return events
 
     #Simulation class
     def run(self):
@@ -433,7 +664,7 @@ class Simulation(object):
         self.jobs_file.close()
 
         # Calculate utilizations of worker machines in DC
-        time_elapsed_in_dc -= start_time_in_dc
+        time_elapsed_in_dc = current_time - start_time_in_dc
         print "Total time elapsed in the DC is", time_elapsed_in_dc, "s"
         utilization = 100 * (float(total_busyness) / float(time_elapsed_in_dc * num_workers))
 
