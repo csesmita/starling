@@ -135,7 +135,7 @@ class ClusterStatusKeeper(object):
            #Negative task times indicate holes to be removed.
            self.worker_queues_history[i] = defaultdict(list)
         for i in scheduler_indices:
-           self.scheduler_view[i] = defaultdict(tuple)
+           self.scheduler_view[i] = defaultdict(int)
 
     def print_holes(self, worker_index):
         print "Actual hole starts from", self.worker_queues_free_time[worker_index]
@@ -145,7 +145,9 @@ class ClusterStatusKeeper(object):
 
     def get_machine_with_shortest_wait(self, scheduler_index):
         availability_at_cores = self.scheduler_view[scheduler_index]
-        if 
+        if len(availability_at_cores) == 0:
+            return 0
+        return list(dict(sorted(availability_at_cores.items(), key=operator.itemgetter(1))).keys())[0]
 
     def get_updated_scheduler_view(self, core_id, scheduler_index, current_time):
         scheduler_time_limit = current_time - UPDATE_DELAY if current_time > UPDATE_DELAY else 0
