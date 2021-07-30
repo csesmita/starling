@@ -143,6 +143,10 @@ class ClusterStatusKeeper(object):
     def print_history(self, worker_index):
         print "History of placements - ", self.worker_queues_history[worker_index]
 
+    def get_machine_with_shortest_wait(self, scheduler_index):
+        availability_at_cores = self.scheduler_view[scheduler_index]
+        if 
+
     def get_updated_scheduler_view(self, core_id, scheduler_index, current_time):
         scheduler_time_limit = current_time - UPDATE_DELAY if current_time > UPDATE_DELAY else 0
         availability_at_cores = self.scheduler_view[scheduler_index]
@@ -526,35 +530,13 @@ class Simulation(object):
         global num_collisions
         # best_fit_for_tasks = (ma, mb, .... )
         best_fit_for_tasks = set()
-        best_fit_for_tasks_central = set()
-        machines = self.machines
-        delay = True if DECENTRALIZED else False
         for task_index in range(job.num_tasks):
-            best_fit_time = float('inf')
-            chosen_machine = None
-            core_at_chosen_machine = None
-            machines_not_yet_processed = range(TOTAL_MACHINES)
-            duration = job.actual_task_duration[task_index]
-            while 1:
-                if not machines_not_yet_processed:
-                    break
-                machine_id = machines_not_yet_processed[0]
-                machines_not_yet_processed.remove(machine_id)
-                est_time, core_list = keeper.get_machine_est_wait(self.machines[machine_id].cores, current_time, best_fit_time, scheduler_index)
-                if est_time < best_fit_time:
-                    best_fit_time = est_time
-                    chosen_machine = machine_id
-                    core_at_chosen_machine = core_list
-                if best_fit_time == int(ceil(current_time)):
-                    #Can't do any better
-                    break
-            if best_fit_time == float('inf') or chosen_machine == None or core_at_chosen_machine == None:
-                raise AssertionError('Error - Got best fit time that is infinite!')
+            best_fit_time, chosen_machine = keeper.get_machine_with_shortest_wait(scheduler_index)
             best_fit_for_tasks.add(chosen_machine)
             #Update est time at this machine and its cores
             #print "Picked machine", chosen_machine," for job", job.id,"task", task_index, "duration", duration,"with best fit scheduler view", best_fit_time,
-            best_fit_time, has_collision = keeper.update_worker_queues_free_time(core_at_chosen_machine, best_fit_time, best_fit_time + int(ceil(duration)), current_time, scheduler_index)
-            probe_params = [core_at_chosen_machine, job.id, task_index, current_time]
+            best_fit_time, has_collision = keeper.update_worker_queues_free_time(chosen_machine, best_fit_time, best_fit_time + int(ceil(job.actual_task_duration[task_index])), current_time, scheduler_index)
+            probe_params = [chosen_machine, job.id, task_index, current_time]
             self.machines[chosen_machine].add_machine_probe(best_fit_time, probe_params)
             if has_collision:
                 num_collisions += 1
