@@ -13,9 +13,6 @@ from operator import itemgetter
 from collections import deque, defaultdict
 from copy import deepcopy
 
-import matplotlib.pyplot as plt
-import numpy as np
-
 class Job(object):
     def __init__(self, line):
         global job_count
