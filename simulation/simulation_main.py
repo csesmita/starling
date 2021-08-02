@@ -118,14 +118,16 @@ class ProbeEventForMachines(Event):
 #####################################################################################################################
 #####################################################################################################################
 class ApplySchedulerUpdates:
-    def __init__(self, machine_id, origin_scheduler_index):
+    def __init__(self, machine_id, origin_scheduler_index, history_time, duration):
         self.origin_scheduler_index  = origin_scheduler_index
         self.machine_id = machine_id
+        self.history_time = history_time
+        self.duration = duration
 
     def run(self, current_time):
         current_time = int(ceil(current_time))
         for rx_scheduler_id in simulation.scheduler_indices:
-            keeper.update_scheduler_view(self.origin_scheduler_index, rx_scheduler_id, self.machine_id, current_time)
+            keeper.update_scheduler_view(self.origin_scheduler_index, rx_scheduler_id, self.machine_id, current_time, history_time, duration)
 
 #####################################################################################################################
 #####################################################################################################################
@@ -218,7 +220,6 @@ class ClusterStatusKeeper(object):
             raise AssertionError('Unexpected - Scheduler sees a more delayed view than actual queue length')
         self.worker_queues_free_time[worker_index] = actual_start_at_worker + duration
         has_collision = False if start_time == actual_start_at_worker else True
-        #TODO - Create the new event here to update other schedulers.
         return actual_start_at_worker, has_collision
 
 #####################################################################################################################
@@ -527,11 +528,12 @@ class Simulation(object):
         # best_fit_for_tasks = (ma, mb, .... )
         best_fit_for_tasks = set()
         for task_index in range(job.num_tasks):
+            duration = int(ceil(job.actual_task_duration[task_index]))
             best_fit_time, chosen_machine = keeper.get_machine_with_shortest_wait(scheduler_index)
-            best_fit_for_tasks.add(chosen_machine)
+            best_fit_for_tasks.add((chosen_machine, duration))
             #Update est time at this machine and its cores
             #print "Picked machine", chosen_machine," for job", job.id,"task", task_index, "duration", duration,"with best fit scheduler view", best_fit_time,
-            best_fit_time, has_collision = keeper.update_worker_queues_free_time(chosen_machine, best_fit_time, best_fit_time + int(ceil(job.actual_task_duration[task_index])), current_time, scheduler_index)
+            best_fit_time, has_collision = keeper.update_worker_queues_free_time(chosen_machine, best_fit_time, best_fit_time + duration, current_time, scheduler_index)
             probe_params = [chosen_machine, job.id, task_index, current_time]
             self.machines[chosen_machine].add_machine_probe(best_fit_time, probe_params)
             if has_collision:
@@ -579,9 +581,10 @@ class Simulation(object):
         # Find machines for tasks and trigger events.
         # Returns a set of machines to service tasks of the job - (m1, m2, ...).
         # May be less than the number of tasks due to same machines hosting more than one task.
-        machine_indices = self.find_machines_murmuration(job, current_time, scheduler_index)
-        for machine_id in machine_indices:
+        machine_indices_duration = self.find_machines_murmuration(job, current_time, scheduler_index)
+        for machine_id, duration in machine_indices_duration:
             task_arrival_events.append((current_time, ProbeEventForMachines(self.machines[machine_id])))
+            task_arrival_events.append((current_time + UPDATE_DELAY, ApplySchedulerUpdates(machine_id, scheduler_index, current_time, duration)
         return task_arrival_events
 
     #Simulation class
