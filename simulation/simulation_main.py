@@ -150,6 +150,8 @@ class ClusterStatusKeeper(object):
            self.worker_queues_history[i] = defaultdict(list)
         for i in scheduler_indices:
            self.scheduler_view[i] = defaultdict(int)
+           for j in range(num_workers):
+               self.scheduler_view[i][j] = 0
 
     def print_holes(self, worker_index):
         print "Actual hole starts from", self.worker_queues_free_time[worker_index]
@@ -175,11 +177,16 @@ class ClusterStatusKeeper(object):
         core_availability += duration
         availability_at_cores[core_id] = core_availability
 
-    def get_machine_with_shortest_wait(self, scheduler_index):
+    def get_machine_with_shortest_wait(self, scheduler_index, current_time):
+        current_time = int(ceil(current_time))
         availability_at_cores = self.scheduler_view[scheduler_index]
+        #print availability_at_cores
         if len(availability_at_cores) == 0:
-            return 0,0
-        return dict(sorted(availability_at_cores.items(), key=itemgetter(1))).items()[0]
+            return 0, current_time
+        chosen_machine, best_fit_time = dict(sorted(availability_at_cores.items(), key=itemgetter(1))).items()[0]
+        if best_fit_time < current_time:
+            best_fit_time = current_time
+        return chosen_machine, best_fit_time
 
     def get_machine_est_wait(self, cores, current_time, best_current_time, scheduler_index):
         current_time = int(ceil(current_time))
@@ -202,6 +209,7 @@ class ClusterStatusKeeper(object):
         duration = end_time - start_time
         updated_view = 0
         availability_at_cores = self.scheduler_view[scheduler_index]
+        actual_start_at_worker = self.worker_queues_free_time[core_id] if self.worker_queues_free_time[core_id] > current_time else current_time
         if core_id in availability_at_cores.keys():
             updated_view = availability_at_cores[core_id]
 
@@ -214,7 +222,6 @@ class ClusterStatusKeeper(object):
         availability_at_cores[core_id] = updated_view
 
         #Update the actual worker's queue.
-        actual_start_at_worker = self.worker_queues_free_time[core_id] if self.worker_queues_free_time[core_id] > current_time else current_time
         if actual_start_at_worker < start_time:
             print "Actual start at worker is",actual_start_at_worker, "while scheduler predicted",start_time
             print "(Actual queue length at worker is",self.worker_queues_free_time[core_id], "at time",current_time,")"
@@ -530,7 +537,7 @@ class Simulation(object):
         best_fit_for_tasks = set()
         for task_index in range(job.num_tasks):
             duration = int(ceil(job.actual_task_duration[task_index]))
-            chosen_machine, best_fit_time = keeper.get_machine_with_shortest_wait(scheduler_index)
+            chosen_machine, best_fit_time = keeper.get_machine_with_shortest_wait(scheduler_index, current_time)
             best_fit_for_tasks.add((chosen_machine, duration))
             #Update est time at this machine and its cores
             #print "Picked machine", chosen_machine," for job", job.id,"task", task_index, "duration", duration,"with best fit scheduler view", best_fit_time,
@@ -539,6 +546,8 @@ class Simulation(object):
             self.machines[chosen_machine].add_machine_probe(best_fit_time, probe_params)
             if has_collision:
                 num_collisions += 1
+                #print "adjusted to", best_fit_time
+            #print ""
         return best_fit_for_tasks
 
     #Simulation class
