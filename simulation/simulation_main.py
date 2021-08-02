@@ -115,6 +115,17 @@ class ProbeEventForMachines(Event):
     def run(self, current_time):
         return self.machine.try_process_next_probe_murmuration(current_time)
 
+#####################################################################################################################
+#####################################################################################################################
+class ApplySchedulerUpdates:
+    def __init__(self, machine_id, origin_scheduler_index):
+        self.origin_scheduler_index  = origin_scheduler_index
+        self.machine_id = machine_id
+
+    def run(self, current_time):
+        current_time = int(ceil(current_time))
+        for rx_scheduler_id in simulation.scheduler_indices:
+            keeper.update_scheduler_view(self.origin_scheduler_index, rx_scheduler_id, self.machine_id, current_time)
 
 #####################################################################################################################
 #####################################################################################################################
@@ -143,52 +154,30 @@ class ClusterStatusKeeper(object):
     def print_history(self, worker_index):
         print "History of placements - ", self.worker_queues_history[worker_index]
 
+    def update_scheduler_view(origin_scheduler_index, rx_scheduler_index, core_id,current_time, history_time, duration):
+        if origin_scheduler_index == rx_scheduler_index:
+            return
+        availability_at_cores = self.scheduler_view[rx_scheduler_index]
+        last_updated_time = 0
+        core_availability = 0
+        if core_id in availability_at_cores.keys():
+            core_availability = availability_at_cores[core_id]
+        #Update whatever is received from other schedulers and earlier placements by self.
+        #This is the complete truth.
+        if history_time > core_availability:
+            #Placement happened after previous tasks had completed.
+            #This advancement cannot be reversed.
+            #All durations get added beyond this hole.
+            core_availability = history_time
+        core_availability += duration
+        availability_at_cores[core_id] = core_availability
+        self.scheduler_view[rx_scheduler_index] = availability_at_cores
+
     def get_machine_with_shortest_wait(self, scheduler_index):
         availability_at_cores = self.scheduler_view[scheduler_index]
         if len(availability_at_cores) == 0:
             return 0
         return list(dict(sorted(availability_at_cores.items(), key=operator.itemgetter(1))).keys())[0]
-
-    def get_updated_scheduler_view(self, core_id, scheduler_index, current_time):
-        scheduler_time_limit = current_time - UPDATE_DELAY if current_time > UPDATE_DELAY else 0
-        availability_at_cores = self.scheduler_view[scheduler_index]
-        last_updated_time = 0
-        core_availability = 0
-        if core_id in availability_at_cores.keys():
-            last_updated_time, core_availability = availability_at_cores[core_id]
-        #Update whatever is received from other schedulers and earlier placements by self.
-        #This is the complete truth.
-        last_successful_update_time = last_updated_time
-        for history_time, scheduler_duration_list in sorted(self.worker_queues_history[core_id].items()):
-            if history_time > scheduler_time_limit:
-                break
-            if history_time <= last_updated_time:
-                continue
-            if history_time > core_availability:
-                #Placement happened after previous tasks had completed.
-                core_availability = history_time
-            for history_scheduler, duration in scheduler_duration_list:
-                core_availability += duration
-            last_successful_update_time = history_time
-        if last_successful_update_time < last_updated_time:
-            raise AssertionError('Unexpected - Current update time is less than previous')
-        availability_at_cores[core_id] = (last_successful_update_time, core_availability)
-        self.scheduler_view[scheduler_index] = availability_at_cores
-        updated_view = core_availability
-        #The scheduler view generated does not remember recent placements made by self.
-        #This avoids double counting of placements made by self.
-        #This is also because this information might not be the complete truth.
-        for history_time, scheduler_duration_list in sorted(self.worker_queues_history[core_id].items()):
-            if history_time <= scheduler_time_limit:
-                #Already updated.
-                continue
-            if history_time > updated_view:
-                #Placement happened after previous tasks had completed.
-                updated_view = history_time
-            for history_scheduler, duration in scheduler_duration_list:
-                if history_scheduler == scheduler_index:
-                    updated_view += duration
-        return updated_view
 
     def get_machine_est_wait(self, cores, current_time, best_current_time, scheduler_index):
         current_time = int(ceil(current_time))
@@ -205,17 +194,21 @@ class ClusterStatusKeeper(object):
             raise AssertionError('debug')
         return (earliest_available_time, selected_core_id)
 
-    def update_history_holes(self, worker_index, current_time, duration, scheduler_index):
-        self.worker_queues_history[worker_index][current_time].append((scheduler_index, duration))
-
     def update_worker_queues_free_time(self, worker_index, start_time, end_time, current_time, scheduler_index):
         current_time = int(ceil(current_time))
-        history = self.worker_queues_history[worker_index]
-
-        #Record this placement information, to apply as updates to other schedulers.
-        self.update_history_holes(worker_index, current_time, end_time - start_time, scheduler_index)
 
         duration = end_time - start_time
+        updated_view = 0
+        if core_id in availability_at_cores.keys():
+            updated_view = availability_at_cores[core_id]
+
+        if start_time > updated_view:
+            #Placement happened after previous tasks had completed.
+            #This advancement cannot be reversed.
+            #All durations get added beyond this hole.
+            updated_view = start_time
+        updated_view += duration
+        availability_at_cores[core_id] = updated_view
 
         #Update the actual worker's queue.
         actual_start_at_worker = self.worker_queues_free_time[worker_index] if self.worker_queues_free_time[worker_index] > current_time else current_time
@@ -225,6 +218,7 @@ class ClusterStatusKeeper(object):
             raise AssertionError('Unexpected - Scheduler sees a more delayed view than actual queue length')
         self.worker_queues_free_time[worker_index] = actual_start_at_worker + duration
         has_collision = False if start_time == actual_start_at_worker else True
+        #TODO - Create the new event here to update other schedulers.
         return actual_start_at_worker, has_collision
 
 #####################################################################################################################
