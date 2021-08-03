@@ -118,16 +118,16 @@ class ProbeEventForMachines(Event):
 #####################################################################################################################
 #####################################################################################################################
 class ApplySchedulerUpdates:
-    def __init__(self, machine_id, origin_scheduler_index, history_time, duration):
+    def __init__(self, machines_and_durations, origin_scheduler_index, history_time):
         self.origin_scheduler_index  = origin_scheduler_index
-        self.machine_id = machine_id
+        self.machines_and_durations = machines_and_durations
         self.history_time = int(ceil(history_time))
-        self.duration = duration
 
     def run(self, current_time):
         current_time = int(ceil(current_time))
-        for rx_scheduler_id in simulation.scheduler_indices:
-            keeper.update_scheduler_view(self.origin_scheduler_index, rx_scheduler_id, self.machine_id, current_time, self.history_time, self.duration)
+        for machine_id, duration in self.machines_and_durations.items():
+            for rx_scheduler_id in simulation.scheduler_indices:
+                keeper.update_scheduler_view(self.origin_scheduler_index, rx_scheduler_id, machine_id, current_time, self.history_time, duration)
         return []
 
 #####################################################################################################################
@@ -511,12 +511,11 @@ class Simulation(object):
     def find_machines_murmuration(self, job, current_time, scheduler_index):
         global time_elapsed_in_dc
         global num_collisions
-        # best_fit_for_tasks = (ma, mb, .... )
-        best_fit_for_tasks = []
+        best_fit_for_tasks = defaultdict(int)
         for task_index in range(job.num_tasks):
             duration = int(ceil(job.actual_task_duration[task_index]))
             chosen_machine, best_fit_time = keeper.get_machine_with_shortest_wait(scheduler_index, current_time)
-            best_fit_for_tasks.append((chosen_machine, duration))
+            best_fit_for_tasks[chosen_machine] += duration
             #Update est time at this machine and its cores
             #print "Picked machine", chosen_machine," for job", job.id,"task", task_index, "duration", duration,"with best fit scheduler view", best_fit_time,
             best_fit_time, has_collision = keeper.update_worker_queues_free_time(chosen_machine, best_fit_time, best_fit_time + duration, current_time, scheduler_index)
@@ -570,9 +569,9 @@ class Simulation(object):
         # Returns a set of machines to service tasks of the job - (m1, m2, ...).
         # May be less than the number of tasks due to same machines hosting more than one task.
         machine_indices_duration = self.find_machines_murmuration(job, current_time, scheduler_index)
-        for machine_id, duration in machine_indices_duration:
+        for machine_id in machine_indices_duration.keys():
             task_arrival_events.append((current_time, ProbeEventForMachines(self.machines[machine_id])))
-            task_arrival_events.append((current_time + UPDATE_DELAY, ApplySchedulerUpdates(machine_id, scheduler_index, current_time, duration)))
+        task_arrival_events.append((current_time + UPDATE_DELAY, ApplySchedulerUpdates(machine_indices_duration, scheduler_index, current_time)))
         return task_arrival_events
 
     #Simulation class
