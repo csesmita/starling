@@ -139,15 +139,9 @@ class ClusterStatusKeeper(object):
     #In Murmuration, worker is the absolute core id, unique to every core in every machine of the DC.
     def __init__(self, num_workers, scheduler_indices):
         self.worker_queues_free_time = {}
-        #Array of history in order to simulate delayed updates
-        self.worker_queues_history = {}
         self.scheduler_view = {}
         for i in range(0, num_workers):
            self.worker_queues_free_time[i] = 0 
-           #History will be {insertion_time: [start_task_time, end_task_time, scheduler_index]} format
-           #Positive task times indicate holes to be put back in.
-           #Negative task times indicate holes to be removed.
-           self.worker_queues_history[i] = defaultdict(list)
         for i in scheduler_indices:
            self.scheduler_view[i] = defaultdict(int)
            for j in range(num_workers):
@@ -156,8 +150,8 @@ class ClusterStatusKeeper(object):
     def print_holes(self, worker_index):
         print "Actual hole starts from", self.worker_queues_free_time[worker_index]
 
-    def print_history(self, worker_index):
-        print "History of placements - ", self.worker_queues_history[worker_index]
+    def print_view(self, scheduler_index):
+        print "Scheduler", scheduler_index, "has view of machines -", self.scheduler_view[scheduler_index]
 
     def update_scheduler_view(self, origin_scheduler_index, rx_scheduler_index, core_id,current_time, history_time, duration):
         if origin_scheduler_index == rx_scheduler_index:
@@ -208,7 +202,7 @@ class ClusterStatusKeeper(object):
 
         #Scheduler sees a longer queue at worker if it had jumped a hole in its view.
         if actual_start_at_worker < start_time:
-            print "Actual start at worker is",actual_start_at_worker, "while scheduler predicted",start_time
+            print "Actual start at worker", core_id,"is",actual_start_at_worker, "while scheduler predicted",start_time
         #Update the actual worker's queue.
         self.worker_queues_free_time[core_id] = actual_start_at_worker + duration
         has_collision = False if start_time == actual_start_at_worker else True
@@ -518,11 +512,11 @@ class Simulation(object):
         global time_elapsed_in_dc
         global num_collisions
         # best_fit_for_tasks = (ma, mb, .... )
-        best_fit_for_tasks = set()
+        best_fit_for_tasks = []
         for task_index in range(job.num_tasks):
             duration = int(ceil(job.actual_task_duration[task_index]))
             chosen_machine, best_fit_time = keeper.get_machine_with_shortest_wait(scheduler_index, current_time)
-            best_fit_for_tasks.add((chosen_machine, duration))
+            best_fit_for_tasks.append((chosen_machine, duration))
             #Update est time at this machine and its cores
             #print "Picked machine", chosen_machine," for job", job.id,"task", task_index, "duration", duration,"with best fit scheduler view", best_fit_time,
             best_fit_time, has_collision = keeper.update_worker_queues_free_time(chosen_machine, best_fit_time, best_fit_time + duration, current_time, scheduler_index)
