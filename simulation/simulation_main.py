@@ -121,7 +121,7 @@ class ApplySchedulerUpdates:
     def __init__(self, machine_id, origin_scheduler_index, history_time, duration):
         self.origin_scheduler_index  = origin_scheduler_index
         self.machine_id = machine_id
-        self.history_time = history_time
+        self.history_time = int(ceil(history_time))
         self.duration = duration
 
     def run(self, current_time):
@@ -188,21 +188,6 @@ class ClusterStatusKeeper(object):
             best_fit_time = current_time
         return chosen_machine, best_fit_time
 
-    def get_machine_est_wait(self, cores, current_time, best_current_time, scheduler_index):
-        current_time = int(ceil(current_time))
-        earliest_available_time = float('inf')
-        selected_core_id = None
-        for core in cores:
-            core_available = keeper.get_updated_scheduler_view(core.id, scheduler_index, current_time)
-            if core_available <= current_time:
-                return (current_time, core.id)
-            if core_available < earliest_available_time:
-                earliest_available_time = core_available
-                selected_core_id = core.id
-        if earliest_available_time == float('inf'):
-            raise AssertionError('debug')
-        return (earliest_available_time, selected_core_id)
-
     def update_worker_queues_free_time(self, core_id, start_time, end_time, current_time, scheduler_index):
         current_time = int(ceil(current_time))
 
@@ -221,11 +206,10 @@ class ClusterStatusKeeper(object):
         updated_view += duration
         availability_at_cores[core_id] = updated_view
 
-        #Update the actual worker's queue.
+        #Scheduler sees a longer queue at worker if it had jumped a hole in its view.
         if actual_start_at_worker < start_time:
             print "Actual start at worker is",actual_start_at_worker, "while scheduler predicted",start_time
-            print "(Actual queue length at worker is",self.worker_queues_free_time[core_id], "at time",current_time,")"
-            raise AssertionError('Unexpected - Scheduler sees a more delayed view than actual queue length')
+        #Update the actual worker's queue.
         self.worker_queues_free_time[core_id] = actual_start_at_worker + duration
         has_collision = False if start_time == actual_start_at_worker else True
         return actual_start_at_worker, has_collision
