@@ -44,41 +44,36 @@ if(len(sys.argv) != 5):
 # pypy process.py finished_file_5000_8_d murmuration YH.tr 5000 8 True
 infile = open(sys.argv[1], 'r')
 jobrunningtime = []
-schedulertime = []
-waittime = []
-processingtime = []
+maxwaittime = []
+jobwaittime = []
+maxprocessingtime = []
+jobprocessingtime = []
 utilization = ""
 for line in infile:
     if "utilization" in line:
         #Copy the line over as is
         utilization = line
         continue
-
-
     runningtime = float((line.split('total_job_running_time: ')[1]).split()[0])
-    jobid = int(((line.split('job_id ')[1]).split())[0])
-    
-    scheduler_time = float(((line.split('scheduler_algorithm_time ')[1]).split())[0])
-    task_wait_time = float(((line.split('task_wait_time ')[1]).split())[0])
-    processing_time = float(((line.split('task_processing_time ')[1]).split())[0])
-
+    jobid = int(((line.split('job_id: ')[1]).split())[0])
+    job_wait_time = float((line.split('job_wait_time: ')[1]).split()[0])
+    max_wait_time = float((line.split('max_wait_time: ')[1]).split()[0])
+    job_processing_time = float((line.split('job_processing_time: ')[1]).split()[0])
+    max_processing_time = float((line.split('max_processing_time: ')[1]).split()[0])
     jobrunningtime.append(runningtime)
-    schedulertime.append(scheduler_time)
-    waittime.append(task_wait_time)
-    processingtime.append(processing_time)
-
+    maxwaittime.append(max_wait_time)
+    jobwaittime.append(job_wait_time)
+    maxprocessingtime.append(max_processing_time)
+    jobprocessingtime.append(job_processing_time)
 infile.close()
 
 jobrunningtime.sort()
-schedulertime.sort()
-waittime.sort()
-processingtime.sort()
 if len(jobrunningtime) > 0:
     outfile = open(sys.argv[2].lower()+"_"+sys.argv[3]+"_"+sys.argv[4], 'a+')
-    outfile.write("%s\t%s\t(%s\t%s\t%s)\n"% ("Cluster Size ", sys.argv[4], "(Scheduler Time", "Task Wait Time", "Task Processing Time)"))
-    outfile.write("%s\t%s\t(%s\t%s\t%s)\n"% ("50th percentile: ",  np.percentile(jobrunningtime, 50), np.percentile(schedulertime, 50), np.percentile(waittime, 50), np.percentile(processingtime, 50))) 
-    outfile.write("%s\t%s\t(%s\t%s\t%s)\n" % ("90th percentile: ", np.percentile(jobrunningtime, 90), np.percentile(schedulertime, 90), np.percentile(waittime, 90), np.percentile(processingtime, 90))) 
-    outfile.write("%s\t%s\t(%s\t%s\t%s)\n" % ("99th percentile: ", np.percentile(jobrunningtime, 99), np.percentile(schedulertime, 99), np.percentile(waittime, 99), np.percentile(processingtime, 99)))
+    outfile.write("%s\t%s\n"% ("Cluster Size ", sys.argv[4]))
+    outfile.write("%s\t%s\n"% ("50th percentile: ",  np.percentile(jobrunningtime, 50)))
+    outfile.write("%s\t%s\n" % ("90th percentile: ", np.percentile(jobrunningtime, 90)))
+    outfile.write("%s\t%s\n" % ("99th percentile: ", np.percentile(jobrunningtime, 99)))
 
     # Copy in utilization informartion
     if utilization != "":

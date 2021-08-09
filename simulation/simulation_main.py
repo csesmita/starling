@@ -25,6 +25,10 @@ class Job(object):
         self.id = job_count
         job_count += 1
         self.completed_tasks_count = 0
+        self.max_wait_time = 0
+        self.job_wait_time = 0
+        self.max_processing_time = 0
+        self.job_processing_time = 0
         self.end_time = self.start_time
         self.unscheduled_tasks = deque()
         self.actual_task_duration = deque()
@@ -37,13 +41,34 @@ class Job(object):
 
     #Job class
     """ Returns true if the job has completed, and false otherwise. """
-    def update_task_completion_details(self, completion_time):
+    def update_task_completion_details(self, completion_time, task_wait_time, task_processing_time):
         self.completed_tasks_count += 1
         self.end_time = max(completion_time, self.end_time)
         if self.completed_tasks_count > self.num_tasks:
             raise AssertionError('update_task_completion_details(): Completed tasks more than number of tasks!')
-        return self.num_tasks == self.completed_tasks_count
+        self.compute_max_wait_time(task_wait_time)
+        self.compute_max_processing_time(task_processing_time)
+        is_job_complete = self.num_tasks == self.completed_tasks_count
+        if is_job_complete:
+            self.compute_job_wait_time(task_wait_time)
+            self.compute_job_processing_time(task_processing_time)
+        return is_job_complete
 
+    #Job class
+    def compute_max_wait_time(self, task_wait_time):
+        self.max_wait_time = max(task_wait_time, self.max_wait_time)
+
+    #Job class
+    def compute_job_wait_time(self, task_wait_time):
+        self.job_wait_time = task_wait_time
+
+    #Job class
+    def compute_max_processing_time(self, task_processing_time):
+        self.max_processing_time = max(task_processing_time, self.max_processing_time)
+
+    #Job class
+    def compute_job_processing_time(self, task_processing_time):
+        self.job_processing_time = task_processing_time
 
     #Job class
     def file_task_execution_time(self, job_args):
@@ -219,13 +244,13 @@ class TaskEndEvent(object):
 
     def run(self, current_time):
         job = simulation.jobs[self.job_id]
-        is_job_complete = job.update_task_completion_details(current_time)
+        is_job_complete = job.update_task_completion_details(current_time, self.task_wait_time, self.task_duration)
 
         if is_job_complete:
             simulation.jobs_completed += 1
             # Task's total time = Scheduler queue time (=0) + Scheduler Algorithm time(=0) + Machine queue wait time + Task processing time
             try:
-                print >> finished_file, current_time,"total_job_running_time:",(job.end_time - job.start_time), "job_id", job.id
+                print >> finished_file, current_time,"job_id:", job.id, "total_job_running_time:",(job.end_time - job.start_time), "job_wait_time:", job.job_wait_time, "max_wait_time:",job.max_wait_time, "job_processing_time:", job.job_processing_time,"max_processing_time:", job.max_processing_time
             except IOError, e:
                 print "Failed writing to output file due to ", e
 
