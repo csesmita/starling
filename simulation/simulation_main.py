@@ -29,6 +29,7 @@ class Job(object):
         self.job_wait_time = 0
         self.max_processing_time = 0
         self.job_processing_time = 0
+        self.has_collision = False
         self.end_time = self.start_time
         self.unscheduled_tasks = deque()
         self.actual_task_duration = deque()
@@ -251,9 +252,13 @@ class TaskEndEvent(object):
             # Task's total time = Scheduler queue time (=0) + Scheduler Algorithm time(=0) + Machine queue wait time + Task processing time
             try:
                 print >> finished_file, current_time,"job_id:", job.id, "total_job_running_time:",(job.end_time - job.start_time), "job_wait_time:", job.job_wait_time, "max_wait_time:",job.max_wait_time, "job_processing_time:", job.job_processing_time,"max_processing_time:", job.max_processing_time
+                print >> job_load_file, job.id, job.has_collision, (job.end_time - job.start_time)
+                load = []
+                for machine_id in range(TOTAL_MACHINES):
+                    load.append(keeper.worker_queues_free_time[machine_id])
+                print >> mc_load_file, job.id, load
             except IOError, e:
                 print "Failed writing to output file due to ", e
-
 
         events = []
         worker = simulation.workers[self.worker_index]
@@ -548,6 +553,7 @@ class Simulation(object):
             self.machines[chosen_machine].add_machine_probe(best_fit_time, probe_params)
             if has_collision:
                 num_collisions += 1
+                job.has_collision = True
                 #print "adjusted to", best_fit_time
             #print ""
         return best_fit_for_tasks
@@ -704,6 +710,14 @@ separator = '_'
 log_file = (separator.join(file_name))
 finished_file   = open(log_file, 'w')
 
+file_name = ['finished_file', sys.argv[2], sys.argv[4], sys.argv[5], sys.argv[6], sys.argv[7], sys.argv[9],sys.argv[10], 'job', 'collisions']
+job_load_file_name = separator.join(file_name)
+job_load_file = open(job_load_file_name,'w')
+
+file_name = ['finished_file', sys.argv[2], sys.argv[4], sys.argv[5], sys.argv[6], sys.argv[7], sys.argv[9],sys.argv[10], 'machine', 'load']
+mc_load_file_name = separator.join(file_name)
+mc_load_file = open(mc_load_file_name,'w')
+
 t1 = time()
 simulation = Simulation()
 num_workers = len(simulation.workers)
@@ -716,5 +730,8 @@ print "Average utilization in", SYSTEM_SIMULATED, "with", TOTAL_MACHINES,"machin
 print >> finished_file, "(Single Core) Average utilization in", SYSTEM_SIMULATED, "with", TOTAL_MACHINES,"machines and",num_workers, "total workers", POLICY, "hole fitting policy and", sys.argv[7],"system is", utilization, "(simulation time:", simulation_time," total DC time:",time_elapsed_in_dc, ")", "total busyness", total_busyness, "update delay is", UPDATE_DELAY, "scheduler:cores ratio", RATIO_SCHEDULERS_TO_WORKERS,"total collisions", num_collisions
 
 finished_file.close()
+job_load_file.close()
+mc_load_file.close()
+
 # Generate CDF data
 import os; os.system("python process.py " + log_file + " " + SYSTEM_SIMULATED + " " + WORKLOAD_FILE + " " + str(TOTAL_MACHINES)); os.remove(log_file)
