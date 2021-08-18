@@ -246,23 +246,30 @@ class TaskEndEvent(object):
     def run(self, current_time):
         job = simulation.jobs[self.job_id]
         is_job_complete = job.update_task_completion_details(current_time, self.task_wait_time, self.task_duration)
+        worker = simulation.workers[self.worker_index]
+        worker.num_tasks += 1
+        worker.busy_time += self.task_duration
 
         if is_job_complete:
             simulation.jobs_completed += 1
             # Task's total time = Scheduler queue time (=0) + Scheduler Algorithm time(=0) + Machine queue wait time + Task processing time
             try:
                 print >> finished_file, current_time,"job_id:", job.id, "total_job_running_time:",(job.end_time - job.start_time), "job_wait_time:", job.job_wait_time, "max_wait_time:",job.max_wait_time, "job_processing_time:", job.job_processing_time,"max_processing_time:", job.max_processing_time
-                print >> job_load_file, job.id, job.has_collision, (job.end_time - job.start_time)
+                print >> job_load_file, current_time, job.id, job.has_collision, (job.end_time - job.start_time)
                 load = []
-                for machine_id in range(TOTAL_MACHINES):
-                    load.append(keeper.worker_queues_free_time[machine_id])
-                print >> mc_load_file, job.id, load
+                tasks = []
+                time = []
+                for temp_worker in simulation.workers:
+                    load.append(keeper.worker_queues_free_time[temp_worker.id])
+                    tasks.append(temp_worker.num_tasks)
+                    time.append(temp_worker.busy_time)
+                print >> mc_load_file, current_time, job.id, load
+                print >> mc_tasks_file, current_time, job.id, tasks
+                print >> mc_time_file, current_time, job.id, time
             except IOError, e:
                 print "Failed writing to output file due to ", e
 
         events = []
-        worker = simulation.workers[self.worker_index]
-        worker.busy_time += self.task_duration
 
         new_events = worker.free_slot(current_time)
         for new_event in new_events:
@@ -476,6 +483,7 @@ class Worker(object):
         self.machine_id = machine_id
         # Parameter to measure how long this worker is busy in the total run.
         self.busy_time = 0.0
+        self.num_tasks = 0
 
     #Worker class
     # In Murmuration, free_slot will report the same to the machine class.
@@ -603,6 +611,7 @@ class Simulation(object):
         for machine_id in machine_indices_duration.keys():
             task_arrival_events.append((current_time, ProbeEventForMachines(self.machines[machine_id])))
         task_arrival_events.append((current_time + UPDATE_DELAY, ApplySchedulerUpdates(machine_indices_duration, scheduler_index, current_time)))
+        print >> scheduler_file, current_time, scheduler_index, job.id, job.num_tasks, machine_indices_duration.keys()
         return task_arrival_events
 
     #Simulation class
@@ -677,21 +686,18 @@ NETWORK_DELAY = 0.0005
 job_count = 1
 random.seed(123456789)
 
-if(len(sys.argv) != 11):
+if(len(sys.argv) != 7):
     print "Incorrect number of parameters."
     sys.exit(1)
 
 WORKLOAD_FILE                   = sys.argv[1]
-CORES_PER_MACHINE               = int(sys.argv[2])
-PROBE_RATIO                     = int(sys.argv[3])
-TOTAL_MACHINES                  = int(sys.argv[4])
-SYSTEM_SIMULATED                = sys.argv[5]
-POLICY                          = sys.argv[6]                      #RANDOM, BEST_FIT, WORST_FIT
-DECENTRALIZED                   = (sys.argv[7] == "DECENTRALIZED") #CENTRALIZED, DECENTRALIZED
-CORE_DISTRIBUTION               = sys.argv[8]                      #STATIC, GAUSSIAN ON CORES_PER_MACHINE
-CORE_DISTRIBUTION_DEVIATION     = 2                                #if CORE_DISTRIBUTION == "GAUSSIAN"
-RATIO_SCHEDULERS_TO_WORKERS     = float(sys.argv[9])
-UPDATE_DELAY                    = float(sys.argv[10])              #in seconds
+CORES_PER_MACHINE               = 1
+PROBE_RATIO                     = 2
+TOTAL_MACHINES                  = int(sys.argv[2])
+SYSTEM_SIMULATED                = sys.argv[3]
+DECENTRALIZED                   = (sys.argv[4] == "DECENTRALIZED") #CENTRALIZED, DECENTRALIZED
+RATIO_SCHEDULERS_TO_WORKERS     = float(sys.argv[5])
+UPDATE_DELAY                    = float(sys.argv[6])              #in seconds
 
 if RATIO_SCHEDULERS_TO_WORKERS > 1:
     print "Scheduler to Cores ratio cannot exceed 1"
@@ -705,18 +711,30 @@ if CORES_PER_MACHINE != 1:
     sys.exit(1)
 
 #log_file is used for logging information on individual jobs, for JCT to be calculated later.
-file_name = ['finished_file', sys.argv[2], sys.argv[4], sys.argv[5], sys.argv[6], sys.argv[7], sys.argv[9],sys.argv[10]]
+file_name = ['finished_file', sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5],sys.argv[6]]
 separator = '_'
 log_file = (separator.join(file_name))
 finished_file   = open(log_file, 'w')
 
-file_name = ['finished_file', sys.argv[2], sys.argv[4], sys.argv[5], sys.argv[6], sys.argv[7], sys.argv[9],sys.argv[10], 'job', 'collisions']
+file_name = ['finished_file', sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5],sys.argv[6], 'job', 'collisions']
 job_load_file_name = separator.join(file_name)
 job_load_file = open(job_load_file_name,'w')
 
-file_name = ['finished_file', sys.argv[2], sys.argv[4], sys.argv[5], sys.argv[6], sys.argv[7], sys.argv[9],sys.argv[10], 'machine', 'load']
+file_name = ['finished_file', sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5],sys.argv[6], 'machine', 'load']
 mc_load_file_name = separator.join(file_name)
 mc_load_file = open(mc_load_file_name,'w')
+
+file_name = ['finished_file', sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5],sys.argv[6], 'machine', 'tasks']
+mc_tasks_file_name = separator.join(file_name)
+mc_tasks_file = open(mc_tasks_file_name,'w')
+
+file_name = ['finished_file', sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5],sys.argv[6], 'machine', 'time']
+mc_time_file_name = separator.join(file_name)
+mc_time_file = open(mc_time_file_name,'w')
+
+file_name = ['finished_file', sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5],sys.argv[6], 'scheduler']
+scheduler_file_name = separator.join(file_name)
+scheduler_file = open(scheduler_file_name,'w')
 
 t1 = time()
 simulation = Simulation()
@@ -726,12 +744,15 @@ simulation.run()
 
 simulation_time = (time() - t1)
 print "Simulation ended in ", simulation_time, " s "
-print "Average utilization in", SYSTEM_SIMULATED, "with", TOTAL_MACHINES,"machines and",num_workers, "total workers", POLICY, "hole fitting policy and", sys.argv[7],"system is", utilization, "(simulation time:", simulation_time," total DC time:",time_elapsed_in_dc, ")", "total busyness", total_busyness, "update delay is", UPDATE_DELAY, "scheduler:cores ratio", RATIO_SCHEDULERS_TO_WORKERS, "total collisions", num_collisions
-print >> finished_file, "(Single Core) Average utilization in", SYSTEM_SIMULATED, "with", TOTAL_MACHINES,"machines and",num_workers, "total workers", POLICY, "hole fitting policy and", sys.argv[7],"system is", utilization, "(simulation time:", simulation_time," total DC time:",time_elapsed_in_dc, ")", "total busyness", total_busyness, "update delay is", UPDATE_DELAY, "scheduler:cores ratio", RATIO_SCHEDULERS_TO_WORKERS,"total collisions", num_collisions
+print "Average utilization in", SYSTEM_SIMULATED, "with", TOTAL_MACHINES,"machines and",num_workers, "total workers and", sys.argv[4],"system is", utilization, "(simulation time:", simulation_time," total DC time:",time_elapsed_in_dc, ")", "total busyness", total_busyness, "update delay is", UPDATE_DELAY, "scheduler:cores ratio", RATIO_SCHEDULERS_TO_WORKERS, "total collisions", num_collisions
+print >> finished_file, "Average utilization in", SYSTEM_SIMULATED, "with", TOTAL_MACHINES,"machines and",num_workers, "total work and", sys.argv[4],"system is", utilization, "(simulation time:", simulation_time," total DC time:",time_elapsed_in_dc, ")", "total busyness", total_busyness, "update delay is", UPDATE_DELAY, "scheduler:cores ratio", RATIO_SCHEDULERS_TO_WORKERS,"total collisions", num_collisions
 
 finished_file.close()
 job_load_file.close()
 mc_load_file.close()
+mc_tasks_file.close()
+mc_time_file.close()
+scheduler_file.close()
 
 # Generate CDF data
-import os; os.system("python process.py " + log_file + " " + SYSTEM_SIMULATED + " " + WORKLOAD_FILE + " " + str(TOTAL_MACHINES)); os.remove(log_file)
+import os; os.system("python process.py " + log_file + " " + SYSTEM_SIMULATED + " " + WORKLOAD_FILE + " " + str(TOTAL_MACHINES)); #os.remove(log_file)
