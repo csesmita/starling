@@ -326,110 +326,42 @@ class Machine(object):
 
     #Machine class
     #Assumes best fit time is always unique across tasks on the same (machine, cores).
-    #Pop best fitting tasks across different cores.
-    #Check which has the fastest completion time and process that task.
-    #Re-insert the rest of the tasks back into machine queue.
-    #This ensures TaskEndEvents, and hence DC time, are monotonically increasing functions.
+    #Pop best fitting tasks queued on the core.
     def try_process_next_probe_murmuration(self, current_time):
         if SYSTEM_SIMULATED == "Sparrow":
             return self.try_process_next_probe_sparrow(current_time)
-        events = []
-        #Candidates list among all possible tasks that can execute with current free cores.
-        earliest_task_completion_time = float('inf')
-        candidate_best_fit_time = 0.0
-        candidate_processing_time = 0.0
-        candidate_task_info = None
-        candidate_cores = {}
-        candidate_probes_covered = PriorityQueue()
-        while 1:
-            if self.queued_probes.empty() or len(self.free_cores) == 0:
-                #Nothing to execute, or nowhere to execute
-                break
-            #print current_time, ":This iteration free cores are ", self.free_cores.keys()
-            #First of the queued tasks in this iteration
-            best_fit_time, task_info = self.queued_probes.get()
-            # Extract all information
-            core_id = task_info[0]
-            job_id = task_info[1]
-            job = simulation.jobs[job_id]
-            if len(job.unscheduled_tasks) <= 0:
-                raise AssertionError('No redundant probes in Murmuration, yet tasks have finished?')
-            task_index = task_info[2]
-            probe_arrival_time = task_info[3]
-            if core_id not in self.free_cores.keys():
-                #Wait for the next event to trigger this task processing
-                candidate_probes_covered.put((best_fit_time, task_info))
-                #Note these cores, they are not ready to execute yet, but important to clear free_cores list.
-                #print "Best fit time", best_fit_time, "Task info", task_info, "reason - cores not yet free"
-                continue
-
-            core_available_time = self.free_cores[core_id]
-            candidate_cores[core_id] = core_available_time
-            del self.free_cores[core_id]
-
-            # Take the larger of the probe arrival time and core free time to determine when the task starts executing.
-            # Best fit is just a time estimate, for task completion use the exact start times and durations.
-            # So, processing time might be less than the current time, even though task completion will be after current time.
-            processing_start_time = core_available_time if core_available_time > probe_arrival_time else probe_arrival_time
-            task_actual_duration = job.actual_task_duration[task_index]
-            task_completion_time = processing_start_time + task_actual_duration
-            if task_completion_time < earliest_task_completion_time:
-                #Replace our previous best candidate.
-                if earliest_task_completion_time != float('inf'):
-                    candidate_probes_covered.put((candidate_best_fit_time, candidate_task_info))
-                    #print "Best fit time", candidate_best_fit_time, "Task info", candidate_task_info, "reason - got a task with earlier finish"
-                earliest_task_completion_time = task_completion_time
-                candidate_best_fit_time = best_fit_time
-                candidate_task_info = task_info
-                candidate_processing_time = processing_start_time
-                #print current_time,": Got candidate best fit time", candidate_best_fit_time, "Task info", task_info, "Cores", core_id, "due to finish at ", earliest_task_completion_time
-            else:
-                #Not our best candidate
-                candidate_probes_covered.put((best_fit_time, task_info))
-                #print "Best fit time", best_fit_time, "Task info", task_info, "reason - not the best candidate"
-
-        if earliest_task_completion_time == float('inf'):
-            #Reinsert all free cores
-            for core_index in candidate_cores.keys():
-                self.free_cores[core_index] = candidate_cores[core_index]
-            #Reinsert all queued probes that were inspected
-            while not candidate_probes_covered.empty():
-                best_fit_time, task_info = candidate_probes_covered.get()
-                self.queued_probes.put((best_fit_time, task_info))
+        if self.queued_probes.empty() or len(self.free_cores) == 0:
+            #Nothing to execute, or nowhere to execute
             return []
-
+        events = []
+        best_fit_time, task_info = self.queued_probes.get()
         # Extract all information
-        core_id = candidate_task_info[0]
-        job_id = candidate_task_info[1]
+        core_id = task_info[0]
+        core_available_time = self.free_cores[core_id]
+        del self.free_cores[core_id]
+        job_id = task_info[1]
         job = simulation.jobs[job_id]
         if len(job.unscheduled_tasks) <= 0:
             raise AssertionError('No redundant probes in Murmuration, yet tasks have finished?')
-        task_index = candidate_task_info[2]
-        probe_arrival_time = candidate_task_info[3]
+        task_index = task_info[2]
+        probe_arrival_time = task_info[3]
 
+        # Take the larger of the probe arrival time and core free time to determine when the task starts executing.
+        # Best fit is just a time estimate, for task completion use the exact start times and durations.
+        # So, processing time might be less than the current time, even though task completion will be after current time.
+        candidate_processing_time = core_available_time if core_available_time > probe_arrival_time else probe_arrival_time
         task_actual_duration = job.actual_task_duration[task_index]
-        #print current_time,": Got candidate best fit time", candidate_best_fit_time, "Task duration", task_actual_duration, "Cores", core_id, "due to finish at ", earliest_task_completion_time
+        earliest_task_completion_time = candidate_processing_time + task_actual_duration
 
         if earliest_task_completion_time < current_time:
-            print current_time,": Got candidate best fit time", candidate_best_fit_time, "Task duration", task_actual_duration, "Cores", core_id, "due to finish at ", earliest_task_completion_time
+            print current_time,": Got candidate best fit time", best_fit_time, "Task duration", task_actual_duration, "Cores", core_id, "due to finish at ", earliest_task_completion_time
             raise AssertionError('Unprocessed task with completion time before current time.')
-
-        #Reinsert all free cores other than the ones needed
-        for core_index in candidate_cores.keys():
-            if core_index != core_id:
-                self.free_cores[core_index] = candidate_cores[core_index]
-
-        #Reinsert all queued probes that were inspected
-        while not candidate_probes_covered.empty():
-            best_fit_time, task_info = candidate_probes_covered.get()
-            self.queued_probes.put((best_fit_time, task_info))
 
         # Finally, process the current task with all these parameters
         #print "Picked machine", self.id," for job", job_id,"task", task_index, "duration", task_actual_duration,"with best fit scheduler view", candidate_processing_time
         new_events = simulation.process_machine_task(self, core_id, job_id, task_index, task_actual_duration, candidate_processing_time, probe_arrival_time)
         for new_event in new_events:
             events.append(new_event)
-
         return events
 
 
